@@ -11,6 +11,15 @@
     <string name="home_empty">还没有录音</string>
     <string name="home_start">开始录制</string>
     <string name="home_start_picked">录制 %1$d 个应用</string>
+    <string name="home_scope_label">录制范围：%1$s</string>
+    <string name="home_scope_all">全设备</string>
+    <string name="home_scope_apps">%1$d 个应用</string>
+    <string name="home_change">更改</string>
+    <string name="settings_scope">录制范围</string>
+    <string name="settings_scope_all">全设备媒体音频</string>
+    <string name="settings_scope_apps">仅指定应用</string>
+    <string name="settings_choose_apps">已选 %1$d 个应用</string>
+    <string name="settings_choose_apps_action">选择</string>
     <string name="home_pick_apps">先选择要录制的应用</string>
     <string name="home_segment_all">全设备</string>
     <string name="home_segment_apps">指定应用</string>
@@ -38,6 +47,8 @@
     <string name="notice_projection_denied">已取消投屏授权，未开始录制</string>
 
     <string name="record_title">正在录制</string>
+    <string name="record_finished">录制完成</string>
+    <string name="record_failed">录制失败</string>
     <string name="record_scope_all">来源：全设备媒体音频</string>
     <string name="record_scope_apps">来源：指定应用</string>
     <string name="record_keep_screen_on">录制期间屏幕保持点亮：锁屏会结束录制</string>
@@ -66,7 +77,7 @@
     <string name="error_projection_null">系统未返回投屏令牌</string>
 
     <string name="picker_title">选择要录制的应用</string>
-    <string name="picker_confirm">开始录制</string>
+    <string name="picker_confirm">确定</string>
     <string name="picker_retry">重试</string>
     <string name="picker_empty">没有找到可选择的应用</string>
     <string name="picker_loading">正在读取应用列表…</string>

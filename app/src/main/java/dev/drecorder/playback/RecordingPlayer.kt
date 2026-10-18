@@ -62,6 +62,18 @@ class RecordingPlayer(context: Context) {
         }
     }
 
+    /** Current playback position in ms; 0 while nothing is loaded. */
+    val positionMs: Long
+        get() = runCatching { player.currentPosition }.getOrDefault(0L)
+
+    /** Media duration in ms; 0 until the player has prepared the item. */
+    val durationMs: Long
+        get() = runCatching { player.duration }.getOrDefault(0L).coerceAtLeast(0L)
+
+    fun seekTo(positionMs: Long) {
+        runCatching { player.seekTo(positionMs.coerceAtLeast(0L)) }
+    }
+
     fun release() {
         runCatching {
             player.removeListener(listener)

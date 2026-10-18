@@ -19,11 +19,22 @@ data class RecordSettings(
     val encoder: EncoderSpec,
     /** Slice length of one recording in minutes; 0 writes a single file. */
     val segmentMinutes: Int,
+    /** True when only [appUids] should be captured instead of every media stream. */
+    val appsOnly: Boolean,
+    val appUids: List<Int>,
 ) {
 
     val isWav: Boolean get() = encoder is EncoderSpec.Wav
 
     val segmentDurationMs: Long get() = segmentMinutes * 60_000L
+
+    /** The filter the capture service should apply right now. */
+    fun captureScope(): dev.drecorder.audio.CaptureScope =
+        if (appsOnly && appUids.isNotEmpty()) {
+            dev.drecorder.audio.CaptureScope.OnlyApps(appUids)
+        } else {
+            dev.drecorder.audio.CaptureScope.AllMedia
+        }
 
     companion object {
         private const val PREFS = "settings"
@@ -33,6 +44,8 @@ data class RecordSettings(
         private const val KEY_FORMAT = "format"
         private const val KEY_OUTPUT_DIR = "outputDir"
         private const val KEY_SEGMENT_MINUTES = "segmentMinutes"
+        private const val KEY_APPS_ONLY = "appsOnly"
+        private const val KEY_APP_UIDS = "appUids"
 
         /** Slice lengths offered in settings; 0 means "one file, however long". */
         val SEGMENT_CHOICES = listOf(0, 5, 15, 30, 60)
@@ -43,6 +56,8 @@ data class RecordSettings(
             bitRate = 192_000,
             encoder = EncoderSpec.Aac(192_000),
             segmentMinutes = 30,
+            appsOnly = false,
+            appUids = emptyList(),
         )
 
         fun load(context: Context): RecordSettings {
@@ -61,6 +76,11 @@ data class RecordSettings(
                 encoder = if (format == "wav") EncoderSpec.Wav else EncoderSpec.Aac(bitRate),
                 segmentMinutes = prefs.getInt(KEY_SEGMENT_MINUTES, defaults.segmentMinutes)
                     .takeIf { it in SEGMENT_CHOICES } ?: defaults.segmentMinutes,
+                appsOnly = prefs.getBoolean(KEY_APPS_ONLY, false),
+                appUids = prefs.getString(KEY_APP_UIDS, "")
+                    .orEmpty()
+                    .split(',')
+                    .mapNotNull { it.trim().toIntOrNull() },
             )
         }
 
@@ -84,6 +104,15 @@ data class RecordSettings(
         fun storeSegmentMinutes(context: Context, minutes: Int) {
             val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             prefs.edit { putInt(KEY_SEGMENT_MINUTES, minutes) }
+        }
+
+        /** The capture range: every media stream, or exactly [uids]. */
+        fun storeRange(context: Context, appsOnly: Boolean, uids: List<Int>) {
+            val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            prefs.edit {
+                putBoolean(KEY_APPS_ONLY, appsOnly && uids.isNotEmpty())
+                putString(KEY_APP_UIDS, uids.joinToString(","))
+            }
         }
 
         fun storeOutputDirectory(context: Context, path: String) {            val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

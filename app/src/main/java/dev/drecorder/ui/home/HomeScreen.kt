@@ -31,9 +31,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -43,10 +40,8 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,78 +51,38 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.drecorder.R
-import dev.drecorder.audio.AppSelection
-import dev.drecorder.audio.CaptureScope
-import dev.drecorder.data.InstalledAppsRepository
-import dev.drecorder.data.LaunchableApp
 import dev.drecorder.data.Recording
 import dev.drecorder.data.formatDuration
 import dev.drecorder.data.formatSize
 import dev.drecorder.ui.recordingWhenLabel
-import kotlinx.coroutines.launch
 
 /**
- * The recording deck.
+ * The recording deck: one range summary line, one big button, recent recordings.
  *
- * `0` = everything the device plays, `1` = only the picked apps. The source choice is a
- * two-segment control that sits directly above the one big button, so starting a
- * recording is at most: tap a segment (only when changing source), tap the button.
- *
- * The permission disclosure opens in a dialog instead of occupying the top of the
- * screen, and recents are a horizontal strip of cards: the home screen answers "what do
- * I record" and "record it", not "browse my library".
+ * The range (everything / a few apps) is configured in Settings on purpose: it changes
+ * rarely, and putting a two-segment picker on the home screen made starting a recording
+ * look like a two-step decision. The button label always states what will be recorded.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     notice: String?,
     onNoticeShown: () -> Unit,
-    onStartCapture: (CaptureScope) -> Unit,
+    onStartCapture: () -> Unit,
     onOpenLibrary: () -> Unit,
     onOpenSettings: () -> Unit,
+    appsOnly: Boolean,
+    appCount: Int,
     recents: List<Recording> = emptyList(),
     recordingNow: Boolean = false,
     onOpenRecording: () -> Unit = {},
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val deviceHasSecureLock = remember(context) {
         context.getSystemService(KeyguardManager::class.java)?.isDeviceSecure == true
     }
-
-    val repository = remember(context) { InstalledAppsRepository(context) }
-    var pickerVisible by remember { mutableStateOf(false) }
-    var pickerApps by remember { mutableStateOf(emptyList<LaunchableApp>()) }
-    var pickerLoading by remember { mutableStateOf(false) }
-    var pickerError by remember { mutableStateOf<String?>(null) }
-    var selection by remember { mutableStateOf(AppSelection(emptyList())) }
-    var sourceIndex by remember { mutableIntStateOf(0) }
     var disclosureVisible by remember { mutableStateOf(false) }
-
-    val pickerLoadError = stringResource(R.string.picker_load_error)
-    val nothingSelected = stringResource(R.string.picker_empty)
-
-    suspend fun loadApps() {
-        pickerLoading = true
-        pickerError = null
-        // Never offer Drecorder itself as a source: capturing our own output is
-        // pointless and confusing.
-        val result = runCatching { repository.launchableApps(setOf(context.packageName)) }
-        pickerApps = result.getOrDefault(emptyList())
-        pickerError = when {
-            result.isFailure -> pickerLoadError
-            pickerApps.isEmpty() -> nothingSelected
-            else -> null
-        }
-        pickerLoading = false
-    }
-
-    LaunchedEffect(pickerVisible) {
-        if (pickerVisible && !pickerLoading && pickerApps.isEmpty() && pickerError == null) {
-            loadApps()
-        }
-    }
 
     LaunchedEffect(notice) {
         val message = notice ?: return@LaunchedEffect
@@ -135,20 +90,16 @@ fun HomeScreen(
         onNoticeShown()
     }
 
-    val pickedCount = selection.distinctUids.size
+    val usesApps = appsOnly && appCount > 0
+    val rangeLabel = if (usesApps) {
+        stringResource(R.string.home_scope_apps, appCount)
+    } else {
+        stringResource(R.string.home_scope_all)
+    }
     val startLabel = when {
         recordingNow -> stringResource(R.string.home_open_recording)
-        sourceIndex == 0 -> stringResource(R.string.home_start)
-        pickedCount == 0 -> stringResource(R.string.home_pick_apps)
-        else -> stringResource(R.string.home_start_picked, pickedCount)
-    }
-
-    fun startRecording() {
-        when {
-            sourceIndex == 0 -> onStartCapture(CaptureScope.AllMedia)
-            pickedCount == 0 -> pickerVisible = true
-            else -> selection.toCaptureScope()?.let(onStartCapture)
-        }
+        usesApps -> stringResource(R.string.home_start_picked, appCount)
+        else -> stringResource(R.string.home_start)
     }
 
     Scaffold(
@@ -185,37 +136,20 @@ fun HomeScreen(
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
             )
 
-            SingleChoiceSegmentedButtonRow(
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 12.dp, start = 24.dp, end = 24.dp),
+                    .padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
             ) {
-                SegmentedButton(
-                    selected = sourceIndex == 0,
-                    onClick = { sourceIndex = 0 },
-                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text(stringResource(R.string.home_segment_all), maxLines = 1)
-                }
-                SegmentedButton(
-                    selected = sourceIndex == 1,
-                    onClick = {
-                        sourceIndex = 1
-                        pickerVisible = true
-                    },
-                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text(
-                        text = if (pickedCount == 0) {
-                            stringResource(R.string.home_segment_apps)
-                        } else {
-                            stringResource(R.string.home_segment_apps_count, pickedCount)
-                        },
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                Text(
+                    text = stringResource(R.string.home_scope_label, rangeLabel),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextButton(onClick = onOpenSettings) {
+                    Text(stringResource(R.string.home_change))
                 }
             }
 
@@ -223,7 +157,7 @@ fun HomeScreen(
 
             DeckButton(
                 recording = recordingNow,
-                onClick = { if (recordingNow) onOpenRecording() else startRecording() },
+                onClick = { if (recordingNow) onOpenRecording() else onStartCapture() },
             )
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -253,7 +187,7 @@ fun HomeScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 24.dp, end = 12.dp, top = 8.dp),
+                    .padding(start = 24.dp, end = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
@@ -288,7 +222,7 @@ fun HomeScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 
@@ -309,27 +243,8 @@ fun HomeScreen(
             },
             confirmButton = {
                 TextButton(onClick = { disclosureVisible = false }) {
-                    Text(stringResource(R.string.record_back))
+                    Text(stringResource(R.string.common_confirm))
                 }
-            },
-        )
-    }
-
-    if (pickerVisible) {
-        AppPickerSheet(
-            apps = pickerApps,
-            isLoading = pickerLoading,
-            loadError = pickerError,
-            onRetry = { scope.launch { loadApps() } },
-            onDismiss = { pickerVisible = false },
-            onConfirm = { picked ->
-                pickerVisible = false
-                selection = picked
-                sourceIndex = if (picked.distinctUids.isNotEmpty()) 1 else 0
-                // Confirming the picker means "record these": asking for a second tap on
-                // the big button after choosing apps made the flow look broken (the
-                // confirm button used to be labelled "开始录制" while only saving).
-                picked.toCaptureScope()?.let(onStartCapture)
             },
         )
     }
@@ -337,7 +252,7 @@ fun HomeScreen(
 
 /**
  * The one button. 112dp is big enough to be the screen's anchor and still fits beside
- * the system gesture bar, and its colour change (teal 鈫?error red) is the only state the
+ * the system gesture bar, and its colour change (teal → error red) is the only state the
  * home screen needs to convey.
  */
 @Composable

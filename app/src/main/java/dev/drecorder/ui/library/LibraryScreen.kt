@@ -38,6 +38,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -70,6 +71,7 @@ import dev.drecorder.data.formatSize
 import dev.drecorder.playback.RecordingPlayer
 import dev.drecorder.ui.recordingWhenLabel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -101,6 +103,8 @@ fun LibraryScreen(onBack: () -> Unit) {
     var recordings by remember { mutableStateOf<List<Recording>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var playingPath by remember { mutableStateOf<String?>(null) }
+    var positionMs by remember { mutableStateOf(0L) }
+    var durationMs by remember { mutableStateOf(0L) }
     var pendingDelete by remember { mutableStateOf<Recording?>(null) }
     var pendingRename by remember { mutableStateOf<Recording?>(null) }
 
@@ -123,6 +127,18 @@ fun LibraryScreen(onBack: () -> Unit) {
 
     LaunchedEffect(Unit) {
         player.failed.collect { playingPath = null; snackbarHostState.showSnackbar(failed) }
+    }
+
+    // Follow the playback position while something is playing; the slider is the only
+    // view of progress in the app, so it has to move.
+    LaunchedEffect(playingPath) {
+        while (playingPath != null) {
+            positionMs = player.positionMs
+            durationMs = player.durationMs
+            delay(250)
+        }
+        positionMs = 0L
+        durationMs = 0L
     }
 
     DisposableEffect(Unit) {
@@ -205,6 +221,12 @@ fun LibraryScreen(onBack: () -> Unit) {
                             },
                             onRename = { pendingRename = recording },
                             onDelete = { pendingDelete = recording },
+                            positionMs = if (playingPath == recording.file.absolutePath) positionMs else 0L,
+                            durationMs = if (playingPath == recording.file.absolutePath) durationMs else 0L,
+                            onSeek = { target ->
+                                player.seekTo(target)
+                                positionMs = target
+                            },
                         )
                         HorizontalDivider(
                             modifier = Modifier.padding(start = 72.dp),
@@ -325,8 +347,13 @@ private fun RecordingRow(
     onShare: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
+    positionMs: Long,
+    durationMs: Long,
+    onSeek: (Long) -> Unit,
 ) {
     var menuVisible by remember { mutableStateOf(false) }
+    // While the thumb is held, the slider follows the finger instead of the player.
+    var dragValue by remember(recording.displayName) { mutableStateOf<Float?>(null) }
 
     Row(
         modifier = Modifier
@@ -392,6 +419,37 @@ private fun RecordingRow(
                             color = MaterialTheme.colorScheme.onErrorContainer,
                         )
                     }
+                }
+            }
+            if (isPlaying) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = formatDuration(positionMs),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Slider(
+                        value = (dragValue ?: positionMs.toFloat())
+                            .coerceIn(0f, durationMs.coerceAtLeast(1L).toFloat()),
+                        onValueChange = { dragValue = it },
+                        onValueChangeFinished = {
+                            dragValue?.let { onSeek(it.toLong()) }
+                            dragValue = null
+                        },
+                        valueRange = 0f..durationMs.coerceAtLeast(1L).toFloat(),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(32.dp)
+                            .padding(horizontal = 6.dp),
+                    )
+                    Text(
+                        text = formatDuration(durationMs),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }

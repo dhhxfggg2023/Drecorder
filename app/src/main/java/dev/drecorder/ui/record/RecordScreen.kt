@@ -65,7 +65,20 @@ fun RecordScreen(scope: CaptureScope = CaptureScope.AllMedia, onDone: () -> Unit
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.record_title)) },
+                // The title has to follow the state: a finished session still saying
+                // "正在录制" made users think nothing had happened.
+                title = {
+                    Text(
+                        stringResource(
+                            when (state) {
+                                is CaptureState.Recording -> R.string.record_title
+                                is CaptureState.Finished -> R.string.record_finished
+                                is CaptureState.Failed -> R.string.record_failed
+                                else -> R.string.record_title
+                            },
+                        ),
+                    )
+                },
                 actions = { TextButton(onClick = onDone) { Text(stringResource(R.string.record_back)) } },
             )
         },

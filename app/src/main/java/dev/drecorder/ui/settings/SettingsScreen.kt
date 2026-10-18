@@ -32,13 +32,19 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.drecorder.R
 import dev.drecorder.capture.RecordSettings
+import dev.drecorder.data.InstalledAppsRepository
+import dev.drecorder.data.LaunchableApp
+import dev.drecorder.ui.home.AppPickerSheet
+import kotlinx.coroutines.launch
 
 /**
  * Settings as one continuous list, not a stack of cards.
@@ -59,9 +65,15 @@ fun SettingsScreen(
     onPickOutputDirectory: () -> Unit,
     onSegmentChange: (minutes: Int) -> Unit,
     onOpenUpdate: () -> Unit,
+    /** The capture range lives here because it changes rarely and made the home screen two-step. */
+    onRangeChange: (appsOnly: Boolean, uids: List<Int>) -> Unit,
+    appCount: Int,
     onChange: (sampleRate: Int, channelCount: Int, bitRate: Int, format: String) -> Unit,
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val repository = remember(context) { InstalledAppsRepository(context) }
 
     var sampleRate by remember(settings) { mutableStateOf(settings.sampleRate) }
     var channelCount by remember(settings) { mutableStateOf(settings.channelCount) }
@@ -69,6 +81,31 @@ fun SettingsScreen(
     var segmentMinutes by remember(settings) { mutableStateOf(settings.segmentMinutes) }
     var format by remember(settings) {
         mutableStateOf(if (settings.isWav) "wav" else "aac")
+    }
+    var pickerVisible by remember { mutableStateOf(false) }
+    var pickerApps by remember { mutableStateOf(emptyList<LaunchableApp>()) }
+    var pickerLoading by remember { mutableStateOf(false) }
+    var pickerError by remember { mutableStateOf<String?>(null) }
+    val pickerLoadError = stringResource(R.string.picker_load_error)
+    val nothingSelected = stringResource(R.string.picker_empty)
+
+    suspend fun loadApps() {
+        pickerLoading = true
+        pickerError = null
+        val result = runCatching { repository.launchableApps(setOf(context.packageName)) }
+        pickerApps = result.getOrDefault(emptyList())
+        pickerError = when {
+            result.isFailure -> pickerLoadError
+            pickerApps.isEmpty() -> nothingSelected
+            else -> null
+        }
+        pickerLoading = false
+    }
+
+    LaunchedEffect(pickerVisible) {
+        if (pickerVisible && !pickerLoading && pickerApps.isEmpty() && pickerError == null) {
+            loadApps()
+        }
     }
 
     LaunchedEffect(notice) {
@@ -105,6 +142,37 @@ fun SettingsScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(bottom = 24.dp),
         ) {
+            SectionTitle(stringResource(R.string.settings_scope))
+            ChoiceRow(
+                label = stringResource(R.string.settings_scope_all),
+                selected = !settings.appsOnly,
+                onSelect = { onRangeChange(false, settings.appUids) },
+            )
+            ChoiceRow(
+                label = stringResource(R.string.settings_scope_apps),
+                selected = settings.appsOnly,
+                onSelect = {
+                    if (settings.appUids.isEmpty()) pickerVisible = true
+                    else onRangeChange(true, settings.appUids)
+                },
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 20.dp, top = 2.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = stringResource(R.string.settings_choose_apps, appCount),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { pickerVisible = true }) {
+                    Text(stringResource(R.string.settings_choose_apps_action))
+                }
+            }
+
             SectionTitle(stringResource(R.string.settings_format))
             ChoiceRow(
                 label = stringResource(R.string.settings_format_aac),
@@ -248,6 +316,20 @@ fun SettingsScreen(
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
             )
         }
+    }
+
+    if (pickerVisible) {
+        AppPickerSheet(
+            apps = pickerApps,
+            isLoading = pickerLoading,
+            loadError = pickerError,
+            onRetry = { scope.launch { loadApps() } },
+            onDismiss = { pickerVisible = false },
+            onConfirm = { picked ->
+                pickerVisible = false
+                onRangeChange(true, picked.distinctUids)
+            },
+        )
     }
 }
 

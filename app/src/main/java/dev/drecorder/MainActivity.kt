@@ -234,7 +234,8 @@ private fun DrecorderApp(openRecordOnLaunch: Boolean) {
         Screen.Home -> HomeScreen(
             notice = notice,
             onNoticeShown = { notice = null },
-            onStartCapture = { scope ->
+            onStartCapture = {
+                val scope = settings.captureScope()
                 if (CaptureOverlay.canShow(context)) {
                     beginCapture(scope)
                 } else {
@@ -246,6 +247,8 @@ private fun DrecorderApp(openRecordOnLaunch: Boolean) {
             },
             onOpenLibrary = { screen = Screen.Library },
             onOpenSettings = { screen = Screen.Settings },
+            appsOnly = settings.appsOnly,
+            appCount = settings.appUids.size,
             recents = recents,
             recordingNow = captureState is CaptureState.Recording,
             onOpenRecording = { screen = Screen.Record },
@@ -264,6 +267,11 @@ private fun DrecorderApp(openRecordOnLaunch: Boolean) {
             onBack = { screen = Screen.Home },
             onPickOutputDirectory = { directoryLauncher.launch(null) },
             onOpenUpdate = { screen = Screen.Update },
+            onRangeChange = { appsOnly, uids ->
+                RecordSettings.storeRange(context, appsOnly, uids)
+                settings = RecordSettings.load(context)
+            },
+            appCount = settings.appUids.size,
             onSegmentChange = { minutes ->
                 RecordSettings.storeSegmentMinutes(context, minutes)
                 settings = RecordSettings.load(context)
