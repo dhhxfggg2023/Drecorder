@@ -10,6 +10,18 @@
     <string name="home_recent">最近录制</string>
     <string name="home_empty">还没有录音</string>
     <string name="home_start">开始录制</string>
+    <string name="home_start_picked">录制所选应用</string>
+    <string name="home_selected_apps">已选 %1$d 个应用</string>
+    <string name="home_source">录制来源</string>
+    <string name="home_why_authorization">为什么需要投屏授权？</string>
+    <string name="home_recording_now">正在录制</string>
+    <string name="home_open_recording">打开</string>
+    <string name="common_cancel">取消</string>
+    <string name="common_confirm">确定</string>
+    <string name="record_when_today">今天 %1$s</string>
+    <string name="record_when_yesterday">昨天 %1$s</string>
+    <string name="record_when_same_year">%1$d月%2$d日 %3$s</string>
+    <string name="record_when_older">%1$d年%2$d月%3$d日</string>
     <string name="home_settings">设置</string>
     <string name="home_view_all">全部</string>
     <string name="disclosure_title">关于权限</string>
@@ -60,6 +72,7 @@
     <string name="settings_channel_mono">单声道</string>
     <string name="settings_channel_stereo">立体声</string>
     <string name="settings_bit_rate">码率</string>
+    <string name="settings_update">更新</string>
     <string name="settings_segment">分段时长</string>
     <string name="settings_segment_off">不分段（全程一个文件）</string>
     <string name="settings_segment_minutes">%1$d 分钟</string>
@@ -91,6 +104,9 @@
     <string name="library_delete_failed">删除失败</string>
     <string name="library_share">分享</string>
     <string name="library_rename">重命名</string>
+    <string name="library_play">播放</string>
+    <string name="library_more">更多操作</string>
+    <string name="library_silent_badge">无声音</string>
     <string name="library_playback_failed">无法播放这个文件</string>
     <string name="library_open_failed">没有找到可用的播放器</string>
 

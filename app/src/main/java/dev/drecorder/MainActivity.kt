@@ -6,6 +6,7 @@ import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -21,9 +22,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import dev.drecorder.audio.CaptureScope
+import dev.drecorder.audio.CaptureState
 import dev.drecorder.audio.EncoderSpec
 import dev.drecorder.audio.isAvailableOnDevice
 import dev.drecorder.capture.CaptureService
+import dev.drecorder.capture.CaptureSession
 import dev.drecorder.capture.RecordSettings
 import dev.drecorder.data.Recording
 import dev.drecorder.data.RecordingLibrary
@@ -60,6 +63,13 @@ private enum class Screen { Home, Record, Library, Settings, Update }
 private fun DrecorderApp() {
     val context = LocalContext.current
     var screen by remember { mutableStateOf(Screen.Home) }
+    val captureState by CaptureSession.state.collectAsState()
+
+    // System back (button or gesture) must walk the in-app stack instead of finishing
+    // the activity: this is one activity with five screens, so there is no framework
+    // back stack to pop.
+    BackHandler(enabled = screen != Screen.Home) { screen = Screen.Home }
+
     var pendingScope by remember { mutableStateOf<CaptureScope>(CaptureScope.AllMedia) }
     var notice by remember { mutableStateOf<String?>(null) }
     var settings by remember { mutableStateOf(RecordSettings.load(context)) }
@@ -176,8 +186,9 @@ private fun DrecorderApp() {
             },
             onOpenLibrary = { screen = Screen.Library },
             onOpenSettings = { screen = Screen.Settings },
-            onOpenUpdate = { screen = Screen.Update },
             recents = recents,
+            recordingNow = captureState is CaptureState.Recording,
+            onOpenRecording = { screen = Screen.Record },
         )
 
         Screen.Record -> RecordScreen(onDone = { screen = Screen.Home })
@@ -192,6 +203,7 @@ private fun DrecorderApp() {
             onNoticeShown = { notice = null },
             onBack = { screen = Screen.Home },
             onPickOutputDirectory = { directoryLauncher.launch(null) },
+            onOpenUpdate = { screen = Screen.Update },
             onSegmentChange = { minutes ->
                 RecordSettings.storeSegmentMinutes(context, minutes)
                 settings = RecordSettings.load(context)
@@ -211,7 +223,7 @@ private fun DrecorderApp() {
             canInstallPackages = canInstall,
             notice = notice,
             onNoticeShown = { notice = null },
-            onBack = { screen = Screen.Home },
+            onBack = { screen = Screen.Settings },
             onCheck = { coordinator.check(silent = false) },
             onDownload = { coordinator.download() },
             onInstall = { coordinator.install() },

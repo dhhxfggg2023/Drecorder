@@ -1,9 +1,13 @@
 package dev.drecorder.data
 
 import java.io.File
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
-/**
- * One finished recording on disk.
+/** One finished recording on disk.
  *
  * `wasSilent` is the field the user most needs: a source that refuses to be
  * captured produces a perfectly valid, perfectly empty file.
@@ -17,6 +21,36 @@ data class Recording(
 ) {
     val displayName: String get() = file.name
 }
+
+/** Which day a recording belongs to, expressed without user-facing text. */
+sealed interface RecordingDay {
+    data object Today : RecordingDay
+    data object Yesterday : RecordingDay
+    data class SameYear(val month: Int, val day: Int) : RecordingDay
+    data class Older(val year: Int, val month: Int, val day: Int) : RecordingDay
+}
+
+/**
+ * Day of [modifiedAtMillis] relative to [nowMillis], so the UI can say "今天 10:17"
+ * instead of `drecorder-20261018-101722-p01.m4a` (the file name is an implementation
+ * detail once the library knows the truth).
+ */
+fun Recording.dayLabel(nowMillis: Long, zone: ZoneId = ZoneId.systemDefault()): RecordingDay {
+    val day = Instant.ofEpochMilli(modifiedAtMillis).atZone(zone).toLocalDate()
+    val today: LocalDate = Instant.ofEpochMilli(nowMillis).atZone(zone).toLocalDate()
+    return when {
+        day == today -> RecordingDay.Today
+        day == today.minusDays(1) -> RecordingDay.Yesterday
+        day.year == today.year -> RecordingDay.SameYear(day.monthValue, day.dayOfMonth)
+        else -> RecordingDay.Older(day.year, day.monthValue, day.dayOfMonth)
+    }
+}
+
+/** `HH:mm` in the given zone. */
+fun Recording.clockLabel(zone: ZoneId = ZoneId.systemDefault()): String =
+    Instant.ofEpochMilli(modifiedAtMillis)
+        .atZone(zone)
+        .format(DateTimeFormatter.ofPattern("HH:mm", Locale.US))
 
 /**
  * Orders recordings newest-first.
