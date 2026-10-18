@@ -4,17 +4,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 
 /**
@@ -136,14 +132,11 @@ fun DrecorderTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
-    val context = LocalContext.current
-    val colorScheme = when {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-
-        darkTheme -> FallbackDark
-        else -> FallbackLight
-    }
+    // Deliberately not dynamic colour: the app has exactly one primary action, and a
+    // wallpaper-derived scheme can hand it a low-contrast, muddy colour pair. The fixed
+    // teal scheme keeps "start recording" recognisable across devices (user choice,
+    // 2026-10-18).
+    val colorScheme = if (darkTheme) FallbackDark else FallbackLight
 
     MaterialTheme(
         colorScheme = colorScheme,

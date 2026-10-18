@@ -10,7 +10,11 @@
     <string name="home_recent">最近录制</string>
     <string name="home_empty">还没有录音</string>
     <string name="home_start">开始录制</string>
-    <string name="home_start_picked">录制所选应用</string>
+    <string name="home_start_picked">录制 %1$d 个应用</string>
+    <string name="home_pick_apps">先选择要录制的应用</string>
+    <string name="home_segment_all">全设备</string>
+    <string name="home_segment_apps">指定应用</string>
+    <string name="home_segment_apps_count">%1$d 个应用</string>
     <string name="home_selected_apps">已选 %1$d 个应用</string>
     <string name="home_source">录制来源</string>
     <string name="home_why_authorization">为什么需要投屏授权？</string>

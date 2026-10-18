@@ -89,7 +89,12 @@
 
 ---
 
-### 2.6 Android 17 (API 37) 新增的「音频感知」授权 API（**必用**）
+### 2.6 Android 14+ 的「共享或录制的范围」选择器（必须显式要整屏）
+Android 14（API 34）起无参 `createScreenCaptureIntent()` 会弹一个「共享或录制的范围」选择器，默认停在**单个应用**，对录音场景是错误默认值：用户要的是设备上所有声音。
+修法：`createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay())`（API 34+），弹窗回到「整个屏幕」并由一条 `继续` 确认。授权范围只影响屏幕侧，**音频过滤仍由 `AudioPlaybackCaptureConfiguration` 的 UID/usage 决定**，两种来源模式都该用整屏令牌。
+> 2026-10-18 真机验证：vivo V2196A / Android 15，弹窗显示「共享或录制的范围 → 整个屏幕」+「继续」，不再是单应用选择器。
+
+### 2.7 Android 17 (API 37) 新增的「音频感知」授权 API（**必用**）
 API 37 给 `MediaProjectionConfig` 增加了 `Builder.setAudioRequested(boolean)` / `isAudioRequested()`——文档原文含义：*若为 true，UI 组件应显示一个让用户启用音频共享的选项*。这是最接近「音频专用授权」的官方能力，**仍嵌在投屏对话框里，不是独立的录音授权**。
 同时新增：`PROJECTION_SOURCE_DISPLAY=2` / `PROJECTION_SOURCE_APP=8` / `PROJECTION_SOURCE_APP_CONTENT=16`、`getProjectionSources()`、`getInitiallySelectedSource()`、`getRequesterHint()`、`isOwnAppContentProvided()`、`isSourceEnabled(int)`。
 → 设计动作：在 API ≥ 37 的机型上，用 `MediaProjectionConfig.Builder().setAudioRequested(true).build()` + `createScreenCaptureIntent(config)` 申请，让系统弹窗明确告知「本 App 要的是音频」；API 29–36 只能退回无参数的 `createScreenCaptureIntent()`，并在 App 内自行解释文案。
@@ -194,8 +199,12 @@ data class CaptureSpec(
 
 ### 5.3 采集核心片段（顺序即正确性）
 ```kotlin
-// 1) 用户授权（增强模式下 PROJECT_MEDIA=allow 时系统直接返回 RESULT_OK，不弹窗）
-val intent = mpm.createScreenCaptureIntent()            // 显式全屏语义，避免 App 级共享弹窗语义歧义
+// 1) 用户授权（Android 14+ 必须显式要整屏，否则弹窗默认停在「单个应用」，见 §2.6）
+val intent = if (Build.VERSION.SDK_INT >= 34) {
+    mpm.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay())
+} else {
+    mpm.createScreenCaptureIntent()
+}
 launcher.launch(intent)
 
 // 2) 先起前台服务（Android 14+ 必须在 getMediaProjection 之前）
@@ -253,34 +262,34 @@ Shizuku（可选依赖，用 `rikka.shizuku:api` + `provider`，**编译期不�
 ## 6. UI 方案（开源简约风，布局参考现有开源项目）
 
 ### 6.1 技术选型
-Kotlin + **Jetpack Compose + Material 3**，单 Activity，无底部导航（功能只有 3 个，导航是噪音）。跟随系统动态取色（Material You）+ 深色模式；无广告、无账号、不上传任何录音；**唯一网络用途是检查更新**（§11），且可在设置里关闭。UI 基线取 Apache-2.0 的 `android/nowinandroid`，功能选择页布局参考 §6.3。
+Kotlin + **Jetpack Compose + Material 3**，单 Activity，无底部导航（功能只有 3 个，导航是噪音）。**固定 teal 配色**（2026-10-18 用户选定，放弃 Material You 动态取色：本 App 只有一个主操作，墙纸取的色可能让它失去对比度）+ 深色模式；无广告、无账号、不上传任何录音；**唯一网络用途是检查更新**（§11），且默认关闭。UI 基线取 Apache-2.0 的 `android/nowinandroid`，首页布局见 §6.2。
+> 字体说明（2026-10-18）：不内置字体。设备把系统字体改成手写体/楷体时，App 内所有文字都会跟随——这是系统级设置，不是本 App 的排版问题；用户选择保持系统字体，避免 APK +15MB。
 
-### 6.2 首页 = 功能选择页（用户明确要求参考开源布局）
-结构参考 **NoneBaiano/OpenRecorder 的「列表 + 标签页」**、**kuscher/studiosnap 的「功能 × 来源」浮动条** 与 **Fossify Voice Recorder 的「列表 + FAB」**：
+### 6.2 首页 = 录制台（2026-10-18 重做，替换第一版「卡片列表」）
+第一版把来源做成两张高卡片、权限说明占首页最大一块、最近录制是纯文本列表，真机上一眼看不到能按的东西。现在的结构：
 
 ```
 ┌───────────────────────────────┐
-│  Drecorder              ⚙️    │   TopAppBar(small)
+│  Drecorder              ⚙️    │  TopAppBar
+│  录制其他应用的媒体音频…        │  一句话说明
+│   ┌─────────┬─────────────┐   │  ② 单选的来源分段控件
+│   │ ✓ 全设备 │   指定应用   │   │     「指定应用」点了先开选择器
+│   └─────────┴─────────────┘   │
 │                               │
-│  ┌───────────────┐            │   ① 主操作卡（大按钮区）
-│  │  ● 仅录制应用  │            │      「选择应用后只录它的声音」
-│  │     媒体音频   │            │      → 打开 App 选择器（可多选）
-│  └───────────────┘            │
-│  ┌───────────────┐            │   ② 次操作卡
-│  │  ◉ 全设备媒体  │            │      「录制设备上所有媒体声」
-│  └───────────────┘            │
-│                               │
-│  最近录制                 全部 │   ③ 最近 3 条，点击进入列表
-│  ▸ 网易云音乐 · 03:21         │
-│  ▸ YouTube    · 12:08         │
-│                               │
-│                        ( ● )  │   ④ FAB = 开始录制（红色 ○ / 停止 ■）
+│          (  ●  )              │  ① 大圆按钮 = 唯一的录制入口
+│          开始录制               │     录制中变红并显示 ■，点它回到录制页
+│      ⓘ 为什么需要投屏授权？      │  ③ 一次性说明收进对话框
+│  ┌──────────────┐ ┌─────────┐ │  ④ 最近录制 = 横向卡片（今天 10:17 · 00:25）
+│  │ 今天 10:16 … │ │ …       │ │     点任一卡片进列表
 └───────────────────────────────┘
 ```
-- 首次启动插入一张**一次性引导卡**：解释「系统只提供投屏授权来做音频捕获，本 App 不录画面」+ 申请 `RECORD_AUDIO` / 通知权限；若检测到设备有锁屏密码，**在同一张卡里预告「锁屏会结束录制，录制期间请保持屏幕点亮」**（不集成 Shizuku，因此没有增强模式开关）。
-- 录制页：大计时 + 实时电平波形（取自 `levels` Flow）+ 停止/暂停 + 「正在录制的应用」名称。**本页必须持有 `FLAG_KEEP_SCREEN_ON`**（§3.2 的核心补偿）。
-- 列表页：`LazyColumn` + 长按多选（参考 Material Files 的选择态）+ 滑动删除，列表项显示时长/大小/来源应用图标。
-- 设置页：采样率（44.1/48k）、码率、格式（M4A/WAV）、输出目录、关于/许可。
+
+- 来源二选一：**全设备**（默认）/ **指定应用**（打开选择器，可多选；选中后分段控件显示「N 个应用」）。
+- 主按钮只有一个，颜色变化（teal → 红）与内部图形（● → ■）承担全部状态表达。
+- 权限说明、锁屏提醒只出现在一次性对话框里，不占据首页。
+- 列表页：扁平分隔行 + 行尾 ⋮（分享/重命名/删除），标题显示「今天 10:17」而不是文件名。
+- 设置页：分区列表（格式/采样率/声道/码率/分段/保存位置/更新/关于），不是卡片堆。
+- 系统返回（按钮或手势）在非首页时回到首页；录制中返回首页会留下「正在录制」横幅，避免回不去录制页。
 
 ### 6.3 参考项目清单（已逐个核对机制与许可，2026-10-17）
 | 项目 | 机制 / 许可 | 借鉴点 |

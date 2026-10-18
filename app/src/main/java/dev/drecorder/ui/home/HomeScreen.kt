@@ -16,19 +16,14 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Apps
-import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.FiberManualRecord
-import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -36,9 +31,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -46,15 +43,16 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.drecorder.R
@@ -69,17 +67,15 @@ import dev.drecorder.ui.recordingWhenLabel
 import kotlinx.coroutines.launch
 
 /**
- * Home: choose a source, then one primary action.
+ * The recording deck.
  *
- * Layout rules this screen follows (docs/DESIGN.md §6.2, revised 2026-10-18 after the
- * first real-device pass):
- * - exactly one filled button — "开始录制" — in the bottom bar, so the primary action
- *   never competes with the source rows for emphasis;
- * - the source rows are compact and carry an icon, a title, one line of explanation
- *   and a chevron, so they read as tappable instead of as text blocks;
- * - the permission disclosure is a single link that opens a dialog, because it is read
- *   once and then never again;
- * - recents show a date + clock, not a file name.
+ * `0` = everything the device plays, `1` = only the picked apps. The source choice is a
+ * two-segment control that sits directly above the one big button, so starting a
+ * recording is at most: tap a segment (only when changing source), tap the button.
+ *
+ * The permission disclosure opens in a dialog instead of occupying the top of the
+ * screen, and recents are a horizontal strip of cards: the home screen answers "what do
+ * I record" and "record it", not "browse my library".
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -106,7 +102,7 @@ fun HomeScreen(
     var pickerLoading by remember { mutableStateOf(false) }
     var pickerError by remember { mutableStateOf<String?>(null) }
     var selection by remember { mutableStateOf(AppSelection(emptyList())) }
-    var usePickedApps by remember { mutableStateOf(false) }
+    var sourceIndex by remember { mutableIntStateOf(0) }
     var disclosureVisible by remember { mutableStateOf(false) }
 
     val pickerLoadError = stringResource(R.string.picker_load_error)
@@ -139,10 +135,20 @@ fun HomeScreen(
         onNoticeShown()
     }
 
-    val startLabel = if (usePickedApps) {
-        stringResource(R.string.home_start_picked)
-    } else {
-        stringResource(R.string.home_start)
+    val pickedCount = selection.distinctUids.size
+    val startLabel = when {
+        recordingNow -> stringResource(R.string.home_open_recording)
+        sourceIndex == 0 -> stringResource(R.string.home_start)
+        pickedCount == 0 -> stringResource(R.string.home_pick_apps)
+        else -> stringResource(R.string.home_start_picked, pickedCount)
+    }
+
+    fun startRecording() {
+        when {
+            sourceIndex == 0 -> onStartCapture(CaptureScope.AllMedia)
+            pickedCount == 0 -> pickerVisible = true
+            else -> selection.toCaptureScope()?.let(onStartCapture)
+        }
     }
 
     Scaffold(
@@ -163,80 +169,76 @@ fun HomeScreen(
                 ),
             )
         },
-        bottomBar = {
-            Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
-                Column(Modifier.navigationBarsPadding()) {
-                    Button(
-                        onClick = {
-                            when {
-                                !usePickedApps -> onStartCapture(CaptureScope.AllMedia)
-                                selection.distinctUids.isEmpty() -> pickerVisible = true
-                                else -> selection.toCaptureScope()?.let(onStartCapture)
-                            }
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 20.dp, vertical = 12.dp)
-                            .height(54.dp),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.FiberManualRecord,
-                            contentDescription = null,
-                            modifier = Modifier.size(20.dp),
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(text = startLabel)
-                    }
-                }
-            }
-        },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .verticalScroll(rememberScrollState()),
+                .navigationBarsPadding(),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
                 text = stringResource(R.string.home_subtitle),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 20.dp),
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
             )
 
-            if (recordingNow) {
-                RecordingBanner(onClick = onOpenRecording)
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp, start = 24.dp, end = 24.dp),
+            ) {
+                SegmentedButton(
+                    selected = sourceIndex == 0,
+                    onClick = { sourceIndex = 0 },
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(stringResource(R.string.home_segment_all), maxLines = 1)
+                }
+                SegmentedButton(
+                    selected = sourceIndex == 1,
+                    onClick = {
+                        sourceIndex = 1
+                        pickerVisible = true
+                    },
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(
+                        text = if (pickedCount == 0) {
+                            stringResource(R.string.home_segment_apps)
+                        } else {
+                            stringResource(R.string.home_segment_apps_count, pickedCount)
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
 
-            SectionLabel(stringResource(R.string.home_source))
-            SourceRow(
-                icon = Icons.Filled.GraphicEq,
-                title = stringResource(R.string.home_mode_all_title),
-                subtitle = stringResource(R.string.home_mode_all_body),
-                selected = !usePickedApps,
-                onClick = { usePickedApps = false },
+            Spacer(modifier = Modifier.weight(1f))
+
+            DeckButton(
+                recording = recordingNow,
+                onClick = { if (recordingNow) onOpenRecording() else startRecording() },
             )
-            Spacer(modifier = Modifier.height(8.dp))
-            SourceRow(
-                icon = Icons.Filled.Apps,
-                title = stringResource(R.string.home_mode_apps_title),
-                subtitle = if (selection.distinctUids.isEmpty()) {
-                    stringResource(R.string.home_mode_apps_body)
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = startLabel,
+                style = MaterialTheme.typography.titleMedium,
+                color = if (recordingNow) {
+                    MaterialTheme.colorScheme.error
                 } else {
-                    stringResource(R.string.home_selected_apps, selection.distinctUids.size)
-                },
-                selected = usePickedApps,
-                onClick = {
-                    usePickedApps = true
-                    pickerVisible = true
+                    MaterialTheme.colorScheme.onSurface
                 },
             )
 
-            TextButton(
-                onClick = { disclosureVisible = true },
-                modifier = Modifier.padding(horizontal = 12.dp),
-            ) {
+            TextButton(onClick = { disclosureVisible = true }) {
                 Icon(
                     imageVector = Icons.Filled.Info,
                     contentDescription = null,
@@ -246,10 +248,12 @@ fun HomeScreen(
                 Text(stringResource(R.string.home_why_authorization))
             }
 
+            Spacer(modifier = Modifier.weight(1f))
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 20.dp, end = 12.dp, top = 8.dp),
+                    .padding(start = 24.dp, end = 12.dp, top = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
@@ -270,11 +274,17 @@ fun HomeScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable(onClick = onOpenLibrary)
-                        .padding(horizontal = 20.dp, vertical = 20.dp),
+                        .padding(horizontal = 24.dp, vertical = 20.dp),
                 )
             } else {
-                recents.forEach { recording ->
-                    RecentRecordingRow(recording = recording, onClick = onOpenLibrary)
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 24.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    items(items = recents, key = { it.displayName }) { recording ->
+                        RecentCard(recording = recording, onClick = onOpenLibrary)
+                    }
                 }
             }
 
@@ -315,148 +325,77 @@ fun HomeScreen(
             onConfirm = { picked ->
                 pickerVisible = false
                 selection = picked
-                usePickedApps = picked.distinctUids.isNotEmpty()
+                sourceIndex = if (picked.distinctUids.isNotEmpty()) 1 else 0
             },
         )
     }
 }
 
-@Composable
-private fun SectionLabel(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 8.dp),
-    )
-}
-
 /**
- * A source option. Selected state is carried by the container colour and the radio
- * dot, never by colour alone: the dot is the non-colour cue.
+ * The one button. 112dp is big enough to be the screen's anchor and still fits beside
+ * the system gesture bar, and its colour change (teal 鈫?error red) is the only state the
+ * home screen needs to convey.
  */
 @Composable
-private fun SourceRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    title: String,
-    subtitle: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
+private fun DeckButton(recording: Boolean, onClick: () -> Unit) {
+    val container = if (recording) {
+        MaterialTheme.colorScheme.error
+    } else {
+        MaterialTheme.colorScheme.primary
+    }
+    val content = if (recording) {
+        MaterialTheme.colorScheme.onError
+    } else {
+        MaterialTheme.colorScheme.onPrimary
+    }
+    Box(
+        modifier = Modifier
+            .padding(4.dp)
+            .size(112.dp)
+            .clip(CircleShape)
+            .background(container)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        // A dot while idle and a square while recording: the classic transport-control
+        // pair, and unambiguous without any label or accessibility text.
+        if (recording) {
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(content),
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(content),
+            )
+        }
+    }
+}
+
+@Composable
+private fun RecentCard(recording: Recording, onClick: () -> Unit) {
     Card(
         modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-            .clickable(role = Role.RadioButton, onClick = onClick),
-        shape = MaterialTheme.shapes.medium,
-        colors = CardDefaults.cardColors(
-            containerColor = if (selected) {
-                MaterialTheme.colorScheme.secondaryContainer
-            } else {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-            },
-        ),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = if (selected) {
-                    MaterialTheme.colorScheme.onSecondaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-            )
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            if (selected) {
-                Box(
-                    modifier = Modifier
-                        .size(12.dp)
-                        .background(MaterialTheme.colorScheme.primary, CircleShape),
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Filled.ChevronRight,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun RecordingBanner(onClick: () -> Unit) {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .width(200.dp)
             .clickable(onClick = onClick),
         shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.primaryContainer,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+        ),
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Filled.FiberManualRecord,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.error,
-                modifier = Modifier.size(18.dp),
-            )
-            Text(
-                text = stringResource(R.string.home_recording_now),
-                style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                text = stringResource(R.string.home_open_recording),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
-    }
-}
-
-/**
- * One line of the "recent recordings" list. Read-only on purpose: tapping opens the
- * library, where play, rename, share and delete live, so the home screen has no
- * second copy of those actions.
- */
-@Composable
-private fun RecentRecordingRow(recording: Recording, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
             Text(
                 text = recordingWhenLabel(recording),
-                style = MaterialTheme.typography.bodyLarge,
+                style = MaterialTheme.typography.titleSmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = stringResource(
                     R.string.library_duration_size,
@@ -466,13 +405,14 @@ private fun RecentRecordingRow(recording: Recording, onClick: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
-        if (recording.wasSilent) {
-            Text(
-                text = stringResource(R.string.library_silent),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.error,
-            )
+            if (recording.wasSilent) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.library_silent_badge),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
         }
     }
 }

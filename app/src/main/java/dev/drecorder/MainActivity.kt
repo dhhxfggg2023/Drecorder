@@ -3,7 +3,9 @@ package dev.drecorder
 import android.Manifest
 import android.app.Activity
 import android.media.projection.MediaProjectionManager
+import android.media.projection.MediaProjectionConfig
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -145,7 +147,20 @@ private fun DrecorderApp() {
         if (grants[Manifest.permission.RECORD_AUDIO] == true) {
             val projectionManager = context.getSystemService(MediaProjectionManager::class.java)
             if (projectionManager != null) {
-                projectionLauncher.launch(projectionManager.createScreenCaptureIntent())
+                // Android 14+ offers a "single app / entire screen" chooser and defaults
+                // to the single-app entry, which is the wrong default for a recorder:
+                // the user asked for everything the device plays. Asking for the default
+                // display explicitly restores the plain "start recording?" dialog. The
+                // capture itself is filtered by uid, not by this token's scope, so this
+                // does not change which audio a "only these apps" session receives.
+                val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    projectionManager.createScreenCaptureIntent(
+                        MediaProjectionConfig.createConfigForDefaultDisplay(),
+                    )
+                } else {
+                    projectionManager.createScreenCaptureIntent()
+                }
+                projectionLauncher.launch(intent)
             } else {
                 notice = projectionDenied
             }
