@@ -77,6 +77,7 @@
 - Android 14+：`createScreenCaptureIntent()` 返回的 Intent **只能 `getMediaProjection()` 一次**；`createVirtualDisplay()` 对同一 token **只能调用一次**，否则 `SecurityException`。我们**不调用** `createVirtualDisplay()`，因此天然规避。
 - 必须 `registerCallback()` 监听 `onStop()`：用户在快捷设置里点掉、锁屏、进程被杀、别的投屏会话抢占，都会触发。**收到 onStop 必须立即停止录音并正常收尾文件**，否则会静默录出无限静音。
 - Android 15 QPR1+：状态栏出现「投屏/录制」胶囊；**锁屏会自动终止会话**（§3.2 解法）。
+  > **2026-10-18 实测修正**：vivo V2196A（Android 15 / API 35，有锁屏密码）锁屏约 15 s 后会话**没有**被终止——`AudioRecord` session 369 从 10:17:22.450 持续到 10:17:45.130 无中断，logcat 无 keyguard 终止记录，产物 550,419 B（22.7 s）完整收尾。说明该撤销行为**依机型/是否含 QPR1 而非仅依 API 级别**。结论：保留 §3.2 的常亮与「终止即收尾」作为兜底，但不要在 UI 上把「锁屏必断」说成所有 Android 15 的事实；换个 QPR1 机型仍需复测（DESIGN §10 第 1 条）。
 - Android 15 QPR1+：投屏保护会**隐藏通知**；RootlessJamesDSP 的应对是提示用户打开开发者选项里的 "Disable screen share protection"（[#252](https://github.com/timschneeb/RootlessJamesDSP/issues/252)）。
 
 ### 2.5 Android 17（API 37）对后台音频的收紧
