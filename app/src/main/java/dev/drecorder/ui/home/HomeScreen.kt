@@ -326,6 +326,10 @@ fun HomeScreen(
                 pickerVisible = false
                 selection = picked
                 sourceIndex = if (picked.distinctUids.isNotEmpty()) 1 else 0
+                // Confirming the picker means "record these": asking for a second tap on
+                // the big button after choosing apps made the flow look broken (the
+                // confirm button used to be labelled "开始录制" while only saving).
+                picked.toCaptureScope()?.let(onStartCapture)
             },
         )
     }
