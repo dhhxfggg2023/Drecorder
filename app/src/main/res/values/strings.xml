@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Drecorder</string>
+
+    <string name="home_subtitle">录制其他应用的媒体音频，不录麦克风、不录屏幕</string>
+    <string name="home_mode_apps_title">仅录制应用媒体音频</string>
+    <string name="home_mode_apps_body">选择应用后只录它的声音</string>
+    <string name="home_mode_all_title">全设备媒体音频</string>
+    <string name="home_mode_all_body">录制设备上所有可被捕获的媒体声音</string>
+    <string name="home_recent">最近录制</string>
+    <string name="home_empty">还没有录音</string>
+    <string name="home_start">开始录制</string>
+    <string name="home_settings">设置</string>
+    <string name="home_view_all">全部</string>
+    <string name="disclosure_title">关于权限</string>
+    <string name="disclosure_body">系统只提供「录制或投射」这一种授权来做音频捕获。Drecorder 只读取声音，不会录制屏幕画面，也不会上传任何内容。</string>
+    <string name="disclosure_lock_warning">设备已设置锁屏密码：锁屏会结束录制，请录制期间保持屏幕点亮。</string>
+    <string name="todo_engine">采集引擎将在下一步接入</string>
+    <string name="todo_app_picker">应用选择器将在下一步接入</string>
+
+    <string name="notice_permission_denied">没有录音权限，无法捕获音频</string>
+    <string name="notice_projection_denied">已取消投屏授权，未开始录制</string>
+
+    <string name="record_title">正在录制</string>
+    <string name="record_scope_all">来源：全设备媒体音频</string>
+    <string name="record_scope_apps">来源：指定应用</string>
+    <string name="record_keep_screen_on">录制期间屏幕保持点亮：锁屏会结束录制</string>
+    <string name="record_silent_warning">未检测到声音。该应用可能禁止被录制（如 Spotify / Chrome），请确认它正在播放。</string>
+    <string name="record_stop">停止并保存</string>
+    <string name="record_idle">当前没有在录制</string>
+    <string name="record_saved">已保存：%1$s</string>
+    <string name="record_saved_silent">已保存，但全程没有声音：%1$s</string>
+    <string name="record_revoked">录制已被系统终止（锁屏或用户撤销授权），文件已保存</string>
+    <string name="record_segments">共 %1$d 段</string>
+    <string name="record_back">返回</string>
+
+    <string name="notification_channel_name">录制中</string>
+    <string name="notification_channel_description">显示正在进行的音频录制</string>
+    <string name="notification_title">Drecorder 正在录制媒体音频</string>
+    <string name="notification_text">只读取声音，不录制屏幕画面</string>
+    <string name="notification_stop">停止</string>
+
+    <string name="error_missing_projection">缺少投屏授权数据</string>
+    <string name="error_projection_null">系统未返回投屏令牌</string>
+
+    <string name="picker_title">选择要录制的应用</string>
+    <string name="picker_confirm">开始录制</string>
+    <string name="picker_retry">重试</string>
+    <string name="picker_empty">没有找到可选择的应用</string>
+    <string name="picker_loading">正在读取应用列表…</string>
+    <string name="picker_note">提示：只按应用主进程 uid 匹配。若某个应用的声音来自独立进程，可能录不到；此时请同时勾选其他条目，或改用「全设备媒体音频」。</string>
+    <string name="picker_load_error">读取应用列表失败</string>
+
+    <string name="settings_title">设置</string>
+    <string name="settings_format">格式</string>
+    <string name="settings_format_aac">AAC（M4A，体积小）</string>
+    <string name="settings_format_wav">WAV（无损，体积大）</string>
+    <string name="settings_sample_rate">采样率</string>
+    <string name="settings_channels">声道</string>
+    <string name="settings_channel_mono">单声道</string>
+    <string name="settings_channel_stereo">立体声</string>
+    <string name="settings_bit_rate">码率</string>
+    <string name="settings_segment">分段时长</string>
+    <string name="settings_segment_off">不分段（全程一个文件）</string>
+    <string name="settings_segment_minutes">%1$d 分钟</string>
+    <string name="settings_segment_note">到时长自动切到下一个文件，录制不中断；锁屏或进程被杀最多丢掉当前这一段。</string>
+    <string name="settings_output_dir">保存位置</string>
+    <string name="settings_output_dir_value">%1$s</string>
+    <string name="settings_change_output_dir">更改</string>
+    <string name="settings_output_dir_unset">使用默认位置（应用专属 Music 目录）</string>
+    <string name="settings_aac_fallback">本机没有可用的 AAC 编码器，实际会写成 WAV</string>
+    <string name="settings_bit_rate_irrelevant_wav">WAV 不使用码率</string>
+    <string name="settings_dir_unwritable">该位置不可写，已继续使用默认位置</string>
+    <string name="settings_saved">设置已保存</string>
+    <string name="settings_kbps">%1$d kbps</string>
+    <string name="settings_hz">%1$d Hz</string>
+    <string name="settings_about">关于</string>
+    <string name="settings_about_body">Drecorder · GPL-3.0\n音频只保存在本机，不联网（仅在开启自动检查更新时访问更新地址）。</string>
+
+    <string name="library_title">录音</string>
+    <string name="library_empty">还没有录音。回到首页开始第一次录制。</string>
+    <string name="library_loading">正在读取录音列表…</string>
+    <string name="library_load_error">读取录音列表失败</string>
+    <string name="library_retry">重试</string>
+    <string name="library_duration_size">%1$s · %2$s</string>
+    <string name="library_playing">正在播放</string>
+    <string name="library_delete">删除</string>
+    <string name="library_delete_confirm_title">删除这条录音？</string>
+    <string name="library_delete_confirm_body">%1$s 将被永久删除。</string>
+    <string name="library_deleted">已删除</string>
+    <string name="library_delete_failed">删除失败</string>
+    <string name="library_share">分享</string>
+    <string name="library_rename">重命名</string>
+    <string name="library_playback_failed">无法播放这个文件</string>
+    <string name="library_open_failed">没有找到可用的播放器</string>
+
+    <string name="update_title">检查更新</string>
+    <string name="update_check">检查更新</string>
+    <string name="update_checking">正在检查更新…</string>
+    <string name="update_current">当前版本 %1$s</string>
+    <string name="update_up_to_date">已是最新版本</string>
+    <string name="update_available">发现新版本 %1$s</string>
+    <string name="update_download">下载</string>
+    <string name="update_downloading">正在下载 %1$d%%</string>
+    <string name="update_verify_failed">校验失败，已删除下载文件</string>
+    <string name="update_check_failed">检查更新失败：%1$s</string>
+    <string name="update_open_releases">打开发布页</string>
+    <string name="update_install">安装</string>
+    <string name="update_manifest_url">更新地址</string>
+    <string name="update_auto_check">启动时自动检查</string>
+    <string name="update_auto_check_summary">最多每天检查一次；关闭后完全离线</string>
+    <string name="update_last_check">上次检查：%1$s</string>
+    <string name="library_silent">全程没有声音</string>
+    <string name="update_never">从未检查</string>
+    <string name="update_unknown_sources">请允许安装来自此来源的应用</string>
+    <string name="update_permission_missing">没有安装应用的权限，无法完成更新</string>
+</resources>

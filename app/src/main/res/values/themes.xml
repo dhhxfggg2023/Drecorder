@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      ComponentActivity + Compose only: no AppCompat, so the platform DayNight
+      theme is enough and the app carries no extra theming dependency.
+    -->
+    <style name="Theme.Drecorder" parent="android:Theme.DeviceDefault.DayNight">
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
+</resources>

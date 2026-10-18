@@ -1,0 +1,29 @@
+# Gradle / Android
+.gradle/
+.gradle-home/
+build/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+
+# IDE
+.idea/
+*.iml
+.kotlin/
+
+# Signing material never belongs in the repository
+*.jks
+*.keystore
+keystore.properties
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Local scratch (adb captures, build logs)
+.tmp-*/
+*.log
+
+# Session ledger: memory for the agent, not part of the product
+.dsh-code/

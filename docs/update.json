@@ -1,0 +1,13 @@
+{
+  "versionCode": 1,
+  "versionName": "0.1.0",
+  "minSupportedVersionCode": 1,
+  "apkUrl": "https://github.com/OWNER/Drecorder/releases/download/v0.1.0/drecorder-0.1.0.apk",
+  "mirrors": [],
+  "sizeBytes": 0,
+  "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "signingCertSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "publishedAt": "1970-01-01T00:00:00Z",
+  "releaseNotes": "Placeholder manifest. scripts/release.ps1 rewrites this file on every release.",
+  "force": false
+}

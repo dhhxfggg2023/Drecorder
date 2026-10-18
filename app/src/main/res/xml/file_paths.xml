@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Sharing a finished recording out to another app. -->
+    <external-files-path name="recordings" path="Music/" />
+    <files-path name="internal" path="." />
+    <!-- Downloads land here before the update is verified and installed. -->
+    <external-files-path name="updates" path="Download/" />
+</paths>
