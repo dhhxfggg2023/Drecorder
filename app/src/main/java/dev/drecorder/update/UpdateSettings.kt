@@ -23,7 +23,7 @@ object UpdateSettings {
 
     /** Placeholder until the repository has a published manifest (docs/DESIGN.md §11.2). */
     const val DEFAULT_MANIFEST_URL =
-        "https://raw.githubusercontent.com/OWNER/Drecorder/main/docs/update.json"
+        "https://raw.githubusercontent.com/dhhxfggg2023/Drecorder/main/docs/update.json"
 
     private const val MIN_CHECK_INTERVAL_MS = 24L * 60 * 60 * 1000
 
@@ -34,8 +34,13 @@ object UpdateSettings {
         prefs(context).edit { putString(KEY_MANIFEST_URL, url.trim()) }
     }
 
+    /**
+     * Off by default: this build is self-hosted, so there is no published manifest to
+     * check until its author publishes one. Turning it on is a deliberate opt-in from
+     * the settings screen, which is also the only place the url can be changed.
+     */
     fun autoCheckEnabled(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_AUTO_CHECK, true)
+        prefs(context).getBoolean(KEY_AUTO_CHECK, false)
 
     fun storeAutoCheck(context: Context, enabled: Boolean) {
         prefs(context).edit { putBoolean(KEY_AUTO_CHECK, enabled) }

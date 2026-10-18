@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -164,26 +165,28 @@ fun HomeScreen(
         },
         bottomBar = {
             Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
-                Button(
-                    onClick = {
-                        when {
-                            !usePickedApps -> onStartCapture(CaptureScope.AllMedia)
-                            selection.distinctUids.isEmpty() -> pickerVisible = true
-                            else -> selection.toCaptureScope()?.let(onStartCapture)
-                        }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 12.dp)
-                        .height(56.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.FiberManualRecord,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp),
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(text = startLabel)
+                Column(Modifier.navigationBarsPadding()) {
+                    Button(
+                        onClick = {
+                            when {
+                                !usePickedApps -> onStartCapture(CaptureScope.AllMedia)
+                                selection.distinctUids.isEmpty() -> pickerVisible = true
+                                else -> selection.toCaptureScope()?.let(onStartCapture)
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 12.dp)
+                            .height(54.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.FiberManualRecord,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(text = startLabel)
+                    }
                 }
             }
         },
