@@ -154,7 +154,11 @@ class UpdateCoordinator(
 
     /** Manual escape hatch when the manifest or a mirror is unreachable. */
     fun openReleasesPage() {
-        val url = manifest?.apkUrl?.substringBeforeLast('/') ?: UpdateSettings.manifestUrl(context)
+        // The asset URL points at one file; the release page is the tag URL one level up.
+        val url = manifest?.apkUrl
+            ?.replace("/releases/download/", "/releases/tag/")
+            ?.substringBeforeLast('/')
+            ?: UpdateSettings.manifestUrl(context)
         runCatching { context.startActivity(installer.releasesPageIntent(url)) }
     }
 

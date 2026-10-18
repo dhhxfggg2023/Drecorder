@@ -1,7 +1,9 @@
 package dev.drecorder.ui.update
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
@@ -25,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -196,11 +199,19 @@ fun UpdateScreen(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text(
-                        text = stringResource(R.string.update_auto_check),
-                        style = MaterialTheme.typography.titleSmall,
-                    )
-                    Switch(checked = autoCheck, onCheckedChange = onAutoCheckChange)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onAutoCheckChange(!autoCheck) },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.update_auto_check),
+                            style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Switch(checked = autoCheck, onCheckedChange = onAutoCheckChange)
+                    }
                     Text(
                         text = stringResource(R.string.update_auto_check_summary),
                         style = MaterialTheme.typography.bodySmall,

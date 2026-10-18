@@ -97,8 +97,10 @@ private fun DrecorderApp() {
     val coordinator = remember(context, appScope) { UpdateCoordinator(context, appScope) }
     val updateState by coordinator.state.collectAsState()
     val updateNotice by coordinator.notice.collectAsState()
-    val autoCheck by remember { mutableStateOf(UpdateSettings.autoCheckEnabled(context)) }
-    val manifestUrl by remember { mutableStateOf(UpdateSettings.manifestUrl(context)) }
+    // These two back the update screen's controls; they are `var` so a tap actually
+    // re-renders them (a `val` here made the auto-check switch look dead).
+    var autoCheck by remember { mutableStateOf(UpdateSettings.autoCheckEnabled(context)) }
+    var manifestUrl by remember { mutableStateOf(UpdateSettings.manifestUrl(context)) }
     var lastCheck by remember { mutableStateOf(UpdateSettings.lastCheckLabel(context)) }
     var canInstall by remember { mutableStateOf(false) }
     // The scope the user asked to record, held while the overlay permission is missing.
@@ -296,10 +298,12 @@ private fun DrecorderApp() {
             onOpenReleases = { coordinator.openReleasesPage() },
             onOpenUnknownSources = { coordinator.openUnknownSourcesSettings() },
             onManifestUrlChange = { url ->
+                manifestUrl = url
                 UpdateSettings.storeManifestUrl(context, url)
                 notice = savedNotice
             },
             onAutoCheckChange = { enabled ->
+                autoCheck = enabled
                 UpdateSettings.storeAutoCheck(context, enabled)
                 if (enabled) coordinator.autoCheckIfDue()
             },
