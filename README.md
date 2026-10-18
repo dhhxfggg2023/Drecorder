@@ -2,6 +2,8 @@
 
 只录**其他应用正在播放的媒体音频**的 Android App：不录音麦克风、不录屏幕画面、不上传任何内容。
 
+> **代码来源**：本仓库全部代码由 AI（DeepSeek 编码代理）生成，由仓库作者提出需求、做设计决策并在真机上验收。使用或修改前请自行审查，不提供任何担保。
+
 它用的是 Android 10 起官方唯一的合法路径：`MediaProjection` 令牌 + `AudioPlaybackCaptureConfiguration` + `AudioRecord`，编码成 AAC-LC 写进 `.m4a`。为了拿到令牌，系统会弹一次「录制或投射」授权框——**这是因为 Android 至今没有「只授权音频」的授权流程**，不是因为我们要录屏。本 App 从不调用 `createVirtualDisplay()`。
 
 ## 能做什么

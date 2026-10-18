@@ -2,12 +2,12 @@
   "versionCode": 1,
   "versionName": "0.1.0",
   "minSupportedVersionCode": 1,
-  "apkUrl": "https://github.com/OWNER/Drecorder/releases/download/v0.1.0/drecorder-0.1.0.apk",
+  "apkUrl": "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.1.0/drecorder-0.1.0.apk",
   "mirrors": [],
-  "sizeBytes": 0,
-  "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-  "signingCertSha256": "0000000000000000000000000000000000000000000000000000000000000000",
-  "publishedAt": "1970-01-01T00:00:00Z",
-  "releaseNotes": "Placeholder manifest. scripts/release.ps1 rewrites this file on every release.",
+  "sizeBytes": 51801998,
+  "sha256": "496434227b45c8838964162fa759cba5be76a44457ec5edfeb0e01d6c22a0df1",
+  "signingCertSha256": "4f070db7fd59b883e7ab771f88cda4bc80ce3b97e1defcf9e7faeab5a496a348",
+  "publishedAt": "2026-10-18T03:15:00Z",
+  "releaseNotes": "第一个可用版本（自用）：只录其他应用的媒体音频；全设备 / 仅指定应用；后台悬浮窗；列表支持播放进度拖动与全选删除；默认每 30 分钟分段。",
   "force": false
 }
