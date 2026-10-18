@@ -74,7 +74,7 @@ scripts/      release.ps1（发布五步）
 tools/        inspect_m4a.py、make_icons.py
 ```
 
-## 发布与自更新
+## 发布与自更新（Publishing and self-update）
 
 自更新要求「同签名才能覆盖安装」：`keystore.properties` + `release.jks` 均不入库（见 `.gitignore`），**必须异地备份**，丢失意味着所有用户只能卸载重装、录音数据丢失。
 
