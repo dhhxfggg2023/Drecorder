@@ -42,7 +42,6 @@ import dev.drecorder.ui.DrecorderTheme
 import dev.drecorder.ui.home.HomeScreen
 import dev.drecorder.ui.library.LibraryScreen
 import dev.drecorder.ui.library.defaultOutputDirectory
-import dev.drecorder.ui.record.RecordScreen
 import dev.drecorder.ui.settings.SettingsScreen
 import dev.drecorder.ui.update.UpdateScreen
 import dev.drecorder.ui.update.UpdateUiState
@@ -56,11 +55,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        val openRecordOnLaunch =
-            intent?.getBooleanExtra(CaptureService.EXTRA_OPEN_RECORD, false) == true
         setContent {
             DrecorderTheme {
-                DrecorderApp(openRecordOnLaunch = openRecordOnLaunch)
+                DrecorderApp()
             }
         }
     }
@@ -77,14 +74,12 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Screen { Home, Record, Library, Settings, Update }
+private enum class Screen { Home, Library, Settings, Update }
 
 @Composable
-private fun DrecorderApp(openRecordOnLaunch: Boolean) {
+private fun DrecorderApp() {
     val context = LocalContext.current
-    var screen by remember {
-        mutableStateOf(if (openRecordOnLaunch) Screen.Record else Screen.Home)
-    }
+    var screen by remember { mutableStateOf(Screen.Home) }
     val captureState by CaptureSession.state.collectAsState()
 
     // System back (button or gesture) must walk the in-app stack instead of finishing
@@ -109,7 +104,7 @@ private fun DrecorderApp(openRecordOnLaunch: Boolean) {
     // The scope the user asked to record, held while the overlay permission is missing.
     var pendingStartScope by remember { mutableStateOf<CaptureScope?>(null) }
     var overlayPrompt by remember { mutableStateOf(false) }
-    var recents by remember { mutableStateOf<List<Recording>>(emptyList()) }
+    var recordingCount by remember { mutableStateOf(0) }
     val library = remember(context) {
         RecordingLibrary(
             directoryProvider = {
@@ -120,12 +115,18 @@ private fun DrecorderApp(openRecordOnLaunch: Boolean) {
         )
     }
 
-    // The home screen shows what was recorded last; reload every time it is shown so
-    // a finished (or deleted) recording is reflected without restarting the app.
-    LaunchedEffect(screen) {
+    val savedToast = stringResource(R.string.home_saved_toast)
+
+    // The home screen only needs the number of files, not the rows themselves.
+    LaunchedEffect(screen, captureState) {
         if (screen == Screen.Home) {
-            recents = withContext(Dispatchers.IO) { library.recordings().take(3) }
+            recordingCount = withContext(Dispatchers.IO) { library.recordings().size }
         }
+    }
+
+    // A finished session has to say so somewhere now that there is no record screen.
+    LaunchedEffect(captureState) {
+        if (captureState is CaptureState.Finished) notice = savedToast
     }
 
     // A cold-start check, rate-limited to once a day by UpdateSettings.shouldAutoCheck.
@@ -158,7 +159,6 @@ private fun DrecorderApp(openRecordOnLaunch: Boolean) {
         val data = result.data
         if (result.resultCode == Activity.RESULT_OK && data != null) {
             CaptureService.start(context, result.resultCode, data, pendingScope)
-            screen = Screen.Record
         } else {
             notice = projectionDenied
         }
@@ -245,16 +245,14 @@ private fun DrecorderApp(openRecordOnLaunch: Boolean) {
                     overlayPrompt = true
                 }
             },
+            onStopCapture = { CaptureService.stop(context) },
             onOpenLibrary = { screen = Screen.Library },
             onOpenSettings = { screen = Screen.Settings },
             appsOnly = settings.appsOnly,
             appCount = settings.appUids.size,
-            recents = recents,
-            recordingNow = captureState is CaptureState.Recording,
-            onOpenRecording = { screen = Screen.Record },
+            recordingSinceMillis = (captureState as? CaptureState.Recording)?.startedAtMillis,
+            recordingCount = recordingCount,
         )
-
-        Screen.Record -> RecordScreen(scope = pendingScope, onDone = { screen = Screen.Home })
 
         Screen.Library -> LibraryScreen(onBack = { screen = Screen.Home })
 

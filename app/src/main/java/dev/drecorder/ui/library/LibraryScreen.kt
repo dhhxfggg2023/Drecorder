@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.GraphicEq
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -79,9 +81,8 @@ import java.io.File
 /**
  * The recording list.
  *
- * Rows are flat list items, not cards: a list of cards reads as unrelated tiles, while
- * a divider-separated list reads as one collection. Each row has one primary target
- * (play) and one overflow menu, instead of three icon buttons competing for the thumb.
+ * Long lists of test recordings are the normal case, so selection is a first-class mode:
+ * tap "选择", tick rows (or "全选"), delete them in one confirmed action.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -105,8 +106,11 @@ fun LibraryScreen(onBack: () -> Unit) {
     var playingPath by remember { mutableStateOf<String?>(null) }
     var positionMs by remember { mutableStateOf(0L) }
     var durationMs by remember { mutableStateOf(0L) }
+    var selectionMode by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf(emptySet<String>()) }
     var pendingDelete by remember { mutableStateOf<Recording?>(null) }
     var pendingRename by remember { mutableStateOf<Recording?>(null) }
+    var deleteSelectedVisible by remember { mutableStateOf(false) }
 
     val failed = stringResource(R.string.library_playback_failed)
     val openFailed = stringResource(R.string.library_open_failed)
@@ -129,8 +133,6 @@ fun LibraryScreen(onBack: () -> Unit) {
         player.failed.collect { playingPath = null; snackbarHostState.showSnackbar(failed) }
     }
 
-    // Follow the playback position while something is playing; the slider is the only
-    // view of progress in the app, so it has to move.
     LaunchedEffect(playingPath) {
         while (playingPath != null) {
             positionMs = player.positionMs
@@ -149,17 +151,84 @@ fun LibraryScreen(onBack: () -> Unit) {
         scope.launch { snackbarHostState.showSnackbar(message) }
     }
 
+    fun exitSelection() {
+        selectionMode = false
+        selected = emptySet()
+    }
+
+    fun deleteRecordings(targets: List<Recording>) {
+        if (targets.isEmpty()) return
+        if (playingPath in targets.map { it.file.absolutePath }) {
+            player.stop()
+            playingPath = null
+        }
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) { targets.all { library.delete(it) } }
+            reload()
+            if (ok) snackbarHostState.showSnackbar(deleted) else snackbarHostState.showSnackbar(deleteFailed)
+        }
+    }
+
+    val allSelected = recordings.isNotEmpty() && selected.size == recordings.size
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.surface,
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.library_title)) },
+                title = {
+                    Text(
+                        if (selectionMode) {
+                            stringResource(R.string.library_selected_count, selected.size)
+                        } else {
+                            stringResource(R.string.library_title)
+                        },
+                    )
+                },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(
+                        onClick = { if (selectionMode) exitSelection() else onBack() },
+                    ) {
                         Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            imageVector = if (selectionMode) {
+                                Icons.Filled.Close
+                            } else {
+                                Icons.AutoMirrored.Filled.ArrowBack
+                            },
                             contentDescription = stringResource(R.string.record_back),
                         )
+                    }
+                },
+                actions = {
+                    if (selectionMode) {
+                        TextButton(
+                            onClick = {
+                                selected = if (allSelected) {
+                                    emptySet()
+                                } else {
+                                    recordings.map { it.displayName }.toSet()
+                                }
+                            },
+                        ) {
+                            Text(
+                                stringResource(
+                                    if (allSelected) {
+                                        R.string.library_clear_selection
+                                    } else {
+                                        R.string.library_select_all
+                                    },
+                                ),
+                            )
+                        }
+                        TextButton(
+                            onClick = { deleteSelectedVisible = true },
+                            enabled = selected.isNotEmpty(),
+                        ) {
+                            Text(stringResource(R.string.library_delete))
+                        }
+                    } else if (recordings.isNotEmpty()) {
+                        TextButton(onClick = { selectionMode = true }) {
+                            Text(stringResource(R.string.library_select))
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -182,7 +251,18 @@ fun LibraryScreen(onBack: () -> Unit) {
                     items(items = recordings, key = { it.displayName }) { recording ->
                         RecordingRow(
                             recording = recording,
+                            selectionMode = selectionMode,
+                            selected = recording.displayName in selected,
                             isPlaying = playingPath == recording.file.absolutePath,
+                            positionMs = if (playingPath == recording.file.absolutePath) positionMs else 0L,
+                            durationMs = if (playingPath == recording.file.absolutePath) durationMs else 0L,
+                            onToggleSelect = {
+                                selected = if (recording.displayName in selected) {
+                                    selected - recording.displayName
+                                } else {
+                                    selected + recording.displayName
+                                }
+                            },
                             onTogglePlay = {
                                 if (playingPath == recording.file.absolutePath) {
                                     player.stop()
@@ -195,6 +275,10 @@ fun LibraryScreen(onBack: () -> Unit) {
                                         notify(failed)
                                     }
                                 }
+                            },
+                            onSeek = { target ->
+                                player.seekTo(target)
+                                positionMs = target
                             },
                             onShare = {
                                 val uri = runCatching {
@@ -221,12 +305,6 @@ fun LibraryScreen(onBack: () -> Unit) {
                             },
                             onRename = { pendingRename = recording },
                             onDelete = { pendingDelete = recording },
-                            positionMs = if (playingPath == recording.file.absolutePath) positionMs else 0L,
-                            durationMs = if (playingPath == recording.file.absolutePath) durationMs else 0L,
-                            onSeek = { target ->
-                                player.seekTo(target)
-                                positionMs = target
-                            },
                         )
                         HorizontalDivider(
                             modifier = Modifier.padding(start = 72.dp),
@@ -246,23 +324,32 @@ fun LibraryScreen(onBack: () -> Unit) {
             confirmButton = {
                 TextButton(onClick = {
                     pendingDelete = null
-                    if (playingPath == target.file.absolutePath) {
-                        player.stop()
-                        playingPath = null
-                    }
-                    scope.launch {
-                        val ok = withContext(Dispatchers.IO) { library.delete(target) }
-                        if (ok) {
-                            reload()
-                            snackbarHostState.showSnackbar(deleted)
-                        } else {
-                            snackbarHostState.showSnackbar(deleteFailed)
-                        }
-                    }
+                    deleteRecordings(listOf(target))
                 }) { Text(stringResource(R.string.library_delete)) }
             },
             dismissButton = {
                 TextButton(onClick = { pendingDelete = null }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
+    }
+
+    if (deleteSelectedVisible) {
+        val targets = recordings.filter { it.displayName in selected }
+        AlertDialog(
+            onDismissRequest = { deleteSelectedVisible = false },
+            title = { Text(stringResource(R.string.library_delete_selected_title, targets.size)) },
+            text = { Text(stringResource(R.string.library_delete_selected_body, targets.size)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    deleteSelectedVisible = false
+                    exitSelection()
+                    deleteRecordings(targets)
+                }) { Text(stringResource(R.string.library_delete)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteSelectedVisible = false }) {
                     Text(stringResource(R.string.common_cancel))
                 }
             },
@@ -342,48 +429,54 @@ private fun RenameDialog(
 @Composable
 private fun RecordingRow(
     recording: Recording,
+    selectionMode: Boolean,
+    selected: Boolean,
     isPlaying: Boolean,
+    positionMs: Long,
+    durationMs: Long,
+    onToggleSelect: () -> Unit,
     onTogglePlay: () -> Unit,
+    onSeek: (Long) -> Unit,
     onShare: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
-    positionMs: Long,
-    durationMs: Long,
-    onSeek: (Long) -> Unit,
 ) {
     var menuVisible by remember { mutableStateOf(false) }
-    // While the thumb is held, the slider follows the finger instead of the player.
     var dragValue by remember(recording.displayName) { mutableStateOf<Float?>(null) }
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onTogglePlay)
+            .clickable(onClick = if (selectionMode) onToggleSelect else onTogglePlay)
             .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Surface(
-            shape = CircleShape,
-            color = if (isPlaying) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.secondaryContainer
-            },
-            modifier = Modifier.size(44.dp),
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    imageVector = if (isPlaying) Icons.Filled.Stop else Icons.Filled.PlayArrow,
-                    contentDescription = stringResource(
-                        if (isPlaying) R.string.library_playing else R.string.library_play,
-                    ),
-                    tint = if (isPlaying) {
-                        MaterialTheme.colorScheme.onPrimary
-                    } else {
-                        MaterialTheme.colorScheme.onSecondaryContainer
-                    },
-                )
+        if (selectionMode) {
+            Checkbox(checked = selected, onCheckedChange = { onToggleSelect() })
+        } else {
+            Surface(
+                shape = CircleShape,
+                color = if (isPlaying) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.secondaryContainer
+                },
+                modifier = Modifier.size(44.dp),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Filled.Stop else Icons.Filled.PlayArrow,
+                        contentDescription = stringResource(
+                            if (isPlaying) R.string.library_playing else R.string.library_play,
+                        ),
+                        tint = if (isPlaying) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.onSecondaryContainer
+                        },
+                    )
+                }
             }
         }
         Column(modifier = Modifier.weight(1f)) {
@@ -421,7 +514,7 @@ private fun RecordingRow(
                     }
                 }
             }
-            if (isPlaying) {
+            if (isPlaying && !selectionMode) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -453,29 +546,31 @@ private fun RecordingRow(
                 }
             }
         }
-        Box {
-            IconButton(onClick = { menuVisible = true }) {
-                Icon(
-                    imageVector = Icons.Filled.MoreVert,
-                    contentDescription = stringResource(R.string.library_more),
-                )
-            }
-            DropdownMenu(expanded = menuVisible, onDismissRequest = { menuVisible = false }) {
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.library_share)) },
-                    leadingIcon = { Icon(Icons.Filled.Share, contentDescription = null) },
-                    onClick = { menuVisible = false; onShare() },
-                )
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.library_rename)) },
-                    leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
-                    onClick = { menuVisible = false; onRename() },
-                )
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.library_delete)) },
-                    leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
-                    onClick = { menuVisible = false; onDelete() },
-                )
+        if (!selectionMode) {
+            Box {
+                IconButton(onClick = { menuVisible = true }) {
+                    Icon(
+                        imageVector = Icons.Filled.MoreVert,
+                        contentDescription = stringResource(R.string.library_more),
+                    )
+                }
+                DropdownMenu(expanded = menuVisible, onDismissRequest = { menuVisible = false }) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.library_share)) },
+                        leadingIcon = { Icon(Icons.Filled.Share, contentDescription = null) },
+                        onClick = { menuVisible = false; onShare() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.library_rename)) },
+                        leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+                        onClick = { menuVisible = false; onRename() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.library_delete)) },
+                        leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
+                        onClick = { menuVisible = false; onDelete() },
+                    )
+                }
             }
         }
     }

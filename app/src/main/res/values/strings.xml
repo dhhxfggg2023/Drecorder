@@ -15,6 +15,15 @@
     <string name="home_scope_all">全设备</string>
     <string name="home_scope_apps">%1$d 个应用</string>
     <string name="home_change">更改</string>
+    <string name="home_tap_to_stop">点按停止录制</string>
+    <string name="home_files">录音文件（%1$d）</string>
+    <string name="library_select">选择</string>
+    <string name="library_selected_count">已选 %1$d 项</string>
+    <string name="library_select_all">全选</string>
+    <string name="library_clear_selection">取消全选</string>
+    <string name="library_delete_selected_title">删除 %1$d 条录音？</string>
+    <string name="library_delete_selected_body">将永久删除选中的 %1$d 条录音，无法恢复。</string>
+    <string name="home_saved_toast">录音已保存</string>
     <string name="settings_scope">录制范围</string>
     <string name="settings_scope_all">全设备媒体音频</string>
     <string name="settings_scope_apps">仅指定应用</string>
