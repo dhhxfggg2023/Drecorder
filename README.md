@@ -22,6 +22,10 @@
 | --- | --- | --- | --- |
 | ![首页](docs/screenshots/home.png) | ![授权弹窗](docs/screenshots/projection-dialog.png) | ![列表](docs/screenshots/library.png) | ![设置](docs/screenshots/settings.png) |
 
+录制中可以切到别的 App，顶部会有可拖动的「时长 + 停止」：
+
+![后台悬浮窗](docs/screenshots/overlay.png)
+
 授权弹窗会明确写「共享或录制的范围 → 整个屏幕」——这是 Android 14+ 的默认行为，但默认值原本停在「单个应用」，本 App 显式请求整屏（`MediaProjectionConfig.createConfigForDefaultDisplay()`），否则用户每次都要多点两下。
 
 ## 系统要求
