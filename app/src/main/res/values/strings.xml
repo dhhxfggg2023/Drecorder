@@ -66,7 +66,7 @@
     <string name="error_projection_null">系统未返回投屏令牌</string>
 
     <string name="picker_title">选择要录制的应用</string>
-    <string name="picker_confirm">开始录制</string>
+    <string name="picker_confirm">确定</string>
     <string name="picker_retry">重试</string>
     <string name="picker_empty">没有找到可选择的应用</string>
     <string name="picker_loading">正在读取应用列表…</string>

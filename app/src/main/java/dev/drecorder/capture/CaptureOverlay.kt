@@ -163,13 +163,15 @@ class CaptureOverlay(
         /** True when the user has granted the overlay permission. */
         fun canShow(context: Context): Boolean = Settings.canDrawOverlays(context)
 
+        /** The system page where that permission is granted, for a launcher to open. */
+        fun permissionIntent(context: Context): Intent = Intent(
+            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+            android.net.Uri.parse("package:${context.packageName}"),
+        )
+
         /** Opens the system page where that permission is granted. */
         fun requestPermission(context: Context) {
-            val intent = Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                android.net.Uri.parse("package:${context.packageName}"),
-            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            runCatching { context.startActivity(intent) }
+            runCatching { context.startActivity(permissionIntent(context).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
         }
 
         private fun formatElapsed(millis: Long): String {

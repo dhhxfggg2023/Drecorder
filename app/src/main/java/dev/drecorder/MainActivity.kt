@@ -106,7 +106,9 @@ private fun DrecorderApp(openRecordOnLaunch: Boolean) {
     val manifestUrl by remember { mutableStateOf(UpdateSettings.manifestUrl(context)) }
     var lastCheck by remember { mutableStateOf(UpdateSettings.lastCheckLabel(context)) }
     var canInstall by remember { mutableStateOf(false) }
-    var overlayPromptScope by remember { mutableStateOf<CaptureScope?>(null) }
+    // The scope the user asked to record, held while the overlay permission is missing.
+    var pendingStartScope by remember { mutableStateOf<CaptureScope?>(null) }
+    var overlayPrompt by remember { mutableStateOf(false) }
     var recents by remember { mutableStateOf<List<Recording>>(emptyList()) }
     val library = remember(context) {
         RecordingLibrary(
@@ -190,6 +192,27 @@ private fun DrecorderApp(openRecordOnLaunch: Boolean) {
         }
     }
 
+    fun beginCapture(scope: CaptureScope) {
+        pendingScope = scope
+        permissionLauncher.launch(
+            arrayOf(
+                Manifest.permission.RECORD_AUDIO,
+                Manifest.permission.POST_NOTIFICATIONS,
+            ),
+        )
+    }
+
+    // Coming back from the overlay-permission page continues the recording the user
+    // asked for, instead of dropping them on the home screen wondering why nothing
+    // started.
+    val overlayPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        val scope = pendingStartScope
+        pendingStartScope = null
+        if (scope != null) beginCapture(scope)
+    }
+
     val directoryLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),
     ) { uri: Uri? ->
@@ -213,17 +236,12 @@ private fun DrecorderApp(openRecordOnLaunch: Boolean) {
             onNoticeShown = { notice = null },
             onStartCapture = { scope ->
                 if (CaptureOverlay.canShow(context)) {
-                    pendingScope = scope
-                    permissionLauncher.launch(
-                        arrayOf(
-                            Manifest.permission.RECORD_AUDIO,
-                            Manifest.permission.POST_NOTIFICATIONS,
-                        ),
-                    )
+                    beginCapture(scope)
                 } else {
                     // The overlay is the only way back into a background recording, so
                     // ask once instead of silently recording without a stop control.
-                    overlayPromptScope = scope
+                    pendingStartScope = scope
+                    overlayPrompt = true
                 }
             },
             onOpenLibrary = { screen = Screen.Library },
@@ -282,27 +300,23 @@ private fun DrecorderApp(openRecordOnLaunch: Boolean) {
         )
     }
 
-    overlayPromptScope?.let { scope ->
+    if (overlayPrompt) {
         AlertDialog(
-            onDismissRequest = { overlayPromptScope = null },
+            onDismissRequest = { overlayPrompt = false },
             title = { Text(stringResource(R.string.overlay_permission_title)) },
             text = { Text(stringResource(R.string.overlay_permission_body)) },
             confirmButton = {
                 TextButton(onClick = {
-                    overlayPromptScope = null
-                    CaptureOverlay.requestPermission(context)
+                    overlayPrompt = false
+                    overlayPermissionLauncher.launch(CaptureOverlay.permissionIntent(context))
                 }) { Text(stringResource(R.string.overlay_permission_open)) }
             },
             dismissButton = {
                 TextButton(onClick = {
-                    overlayPromptScope = null
-                    pendingScope = scope
-                    permissionLauncher.launch(
-                        arrayOf(
-                            Manifest.permission.RECORD_AUDIO,
-                            Manifest.permission.POST_NOTIFICATIONS,
-                        ),
-                    )
+                    overlayPrompt = false
+                    val scope = pendingStartScope
+                    pendingStartScope = null
+                    scope?.let(::beginCapture)
                 }) { Text(stringResource(R.string.overlay_permission_skip)) }
             },
         )
