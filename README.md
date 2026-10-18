@@ -13,6 +13,16 @@
 - 设置：44.1/48 kHz、单/立体声、AAC 128/192/256/320 kbps 或 WAV、保存位置、分段时长
 - 自更新：静态 `docs/update.json` + sha256 + 签名证书校验（未签名构建会拒绝发布，见下）
 
+## 界面
+
+首页是「录制台」：先选来源（全设备 / 指定应用），再按唯一的大按钮开始；最近录制以横向卡片出现。
+
+| 首页 | 投屏授权 | 录音列表 | 设置 |
+| --- | --- | --- | --- |
+| ![首页](docs/screenshots/home.png) | ![授权弹窗](docs/screenshots/projection-dialog.png) | ![列表](docs/screenshots/library.png) | ![设置](docs/screenshots/settings.png) |
+
+授权弹窗会明确写「共享或录制的范围 → 整个屏幕」——这是 Android 14+ 的默认行为，但默认值原本停在「单个应用」，本 App 显式请求整屏（`MediaProjectionConfig.createConfigForDefaultDisplay()`），否则用户每次都要多点两下。
+
 ## 系统要求
 
 - Android 10（API 29）及以上。低于 10 没有回放捕获，唯一替代是 root。
