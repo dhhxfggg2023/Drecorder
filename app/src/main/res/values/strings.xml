@@ -48,6 +48,12 @@
     <string name="record_saved_silent">已保存，但全程没有声音：%1$s</string>
     <string name="record_revoked">录制已被系统终止（锁屏或用户撤销授权），文件已保存</string>
     <string name="record_segments">共 %1$d 段</string>
+    <string name="overlay_stop">停止</string>
+    <string name="overlay_description">正在录制，可拖动</string>
+    <string name="overlay_permission_title">后台悬浮窗</string>
+    <string name="overlay_permission_body">允许悬浮窗后，切到别的应用时顶部会显示录制时间和停止按钮；不开也能录，只是要回到 App 才能停。</string>
+    <string name="overlay_permission_open">去开启</string>
+    <string name="overlay_permission_skip">仍然录制</string>
     <string name="record_back">返回</string>
 
     <string name="notification_channel_name">录制中</string>

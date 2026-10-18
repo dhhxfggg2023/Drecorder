@@ -6,6 +6,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!--
+      The floating recording control (elapsed time + stop) shown while Drecorder is in
+      the background. Optional: without it the app still records, it just cannot be
+      stopped from another app.
+    -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!--
       Self-update: fetch the manifest, then hand a verified APK to the system
       installer. REQUEST_INSTALL_PACKAGES is forbidden on Google Play, and this
       build is not distributed there (docs/DESIGN.md §11.1, §11.3).

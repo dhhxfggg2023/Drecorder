@@ -242,6 +242,8 @@ val record = AudioRecord.Builder()
 <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+<!-- 后台悬浮窗：录制时长 + 停止；可选，拒绝不影响录制 -->
+<uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 <!-- 仅列出桌面应用，避免 QUERY_ALL_PACKAGES -->
 <queries>
   <intent>

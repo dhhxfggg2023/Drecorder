@@ -11,7 +11,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -31,6 +30,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.drecorder.R
+import dev.drecorder.audio.CaptureScope
 import dev.drecorder.audio.CaptureState
 import dev.drecorder.audio.StopReason
 import dev.drecorder.capture.CaptureService
@@ -40,15 +40,14 @@ import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RecordScreen(onDone: () -> Unit) {
+fun RecordScreen(scope: CaptureScope = CaptureScope.AllMedia, onDone: () -> Unit) {
     val context = LocalContext.current
     val state by CaptureSession.state.collectAsState()
-    val level by CaptureSession.level.collectAsState()
     val targetSilent by CaptureSession.targetSilent.collectAsState()
     val handle by CaptureSession.lastHandle.collectAsState()
 
     // The one mitigation we have against Android 15's "locking the screen ends
-    // the projection" rule, since this build does not use Shizuku (DESIGN §3.2).
+    // the projection" rule, since this build does not use Shizuku (DESIGN 搂3.2).
     val view = LocalView.current
     DisposableEffect(Unit) {
         view.keepScreenOn = true
@@ -85,12 +84,15 @@ fun RecordScreen(onDone: () -> Unit) {
                         text = formatDuration(elapsedMs),
                         style = MaterialTheme.typography.displaySmall,
                     )
-                    LinearProgressIndicator(
-                        progress = { level },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    // No level bar: a meter that jumps with every 20 ms read tells the
+                    // user nothing actionable and reads as a broken progress bar. The
+                    // timer, the source and the silent warning are the facts.
                     Text(
-                        text = stringResource(R.string.record_scope_all),
+                        text = if (scope is CaptureScope.OnlyApps) {
+                            stringResource(R.string.record_scope_apps)
+                        } else {
+                            stringResource(R.string.record_scope_all)
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -145,7 +147,7 @@ fun RecordScreen(onDone: () -> Unit) {
                         } else {
                             stringResource(R.string.record_saved_silent, fileName)
                         },
-                        detail = listOfNotNull(segments, revoked).joinToString(" · ")
+                        detail = listOfNotNull(segments, revoked).joinToString(" 路 ")
                             .ifEmpty { null },
                         isWarning = !current.everHadSignal || current.reason == StopReason.ProjectionRevoked,
                     )

@@ -12,6 +12,7 @@ import android.content.pm.ServiceInfo
 import android.media.projection.MediaProjectionManager
 import android.os.Environment
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.IntentCompat
@@ -43,6 +44,7 @@ class CaptureService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var engine: ProjectionCaptureEngine? = null
+    private var overlay: CaptureOverlay? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -65,6 +67,8 @@ class CaptureService : Service() {
     }
 
     override fun onDestroy() {
+        overlay?.hide()
+        overlay = null
         engine?.stop(StopReason.UserStop)
         engine = null
         serviceScope.cancel()
@@ -127,12 +131,41 @@ class CaptureService : Service() {
         serviceScope.launch { capture.state.collect(CaptureSession::onState) }
         serviceScope.launch { capture.level.collect(CaptureSession::onLevel) }
         serviceScope.launch { capture.targetSilent.collect(CaptureSession::onTargetSilent) }
+
+        // A recording of a backgrounded phone needs a way back and a way to stop; the
+        // notification is not enough (it can be swiped away or hidden by the system).
+        if (CaptureOverlay.canShow(this)) {
+            overlay = CaptureOverlay(
+                context = this,
+                onStop = { stop(this) },
+                onOpen = { openApp() },
+            ).also { it.show(System.currentTimeMillis()) }
+        }
+        Log.i(
+            TAG,
+            "capture started scope=$scope uids=${(scope as? CaptureScope.OnlyApps)?.distinctUids.orEmpty()}",
+        )
+    }
+
+    private fun openApp() {
+        startActivity(
+            Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                .putExtra(EXTRA_OPEN_RECORD, true),
+        )
     }
 
     private fun finishSession(reason: StopReason) {
+        overlay?.hide()
+        overlay = null
         val handle = engine?.stop(reason)
         engine = null
         if (handle != null) {
+            Log.i(
+                TAG,
+                "capture finished reason=$reason files=${handle.files.size} " +
+                    "ms=${handle.durationMs} peakDbfs=${handle.peakDbfs} signal=${handle.everHadSignal}",
+            )
             // A blocked source yields a valid but silent file; the sidecar marker is
             // the only thing that lets the library say so (core-data SilentMarker).
             // Every slice of a segmented session gets one.
@@ -201,6 +234,7 @@ class CaptureService : Service() {
     }
 
     companion object {
+        private const val TAG = "DrecorderService"
         private const val CHANNEL_ID = "capture"
         private const val NOTIFICATION_ID = 4711
         private const val ACTION_START = "dev.drecorder.action.START"
@@ -210,6 +244,9 @@ class CaptureService : Service() {
         private const val EXTRA_SCOPE_KIND = "scopeKind"
         private const val EXTRA_UIDS = "uids"
         private const val SCOPE_APPS = "apps"
+
+        /** Set on the MainActivity intent when the overlay asks to reopen the recording screen. */
+        const val EXTRA_OPEN_RECORD = "dev.drecorder.extra.OPEN_RECORD"
 
         fun start(context: Context, resultCode: Int, resultData: Intent, scope: CaptureScope) {
             val intent = Intent(context, CaptureService::class.java)

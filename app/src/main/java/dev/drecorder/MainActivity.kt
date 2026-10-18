@@ -13,6 +13,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -27,6 +30,8 @@ import dev.drecorder.audio.CaptureScope
 import dev.drecorder.audio.CaptureState
 import dev.drecorder.audio.EncoderSpec
 import dev.drecorder.audio.isAvailableOnDevice
+import dev.drecorder.capture.AppVisibility
+import dev.drecorder.capture.CaptureOverlay
 import dev.drecorder.capture.CaptureService
 import dev.drecorder.capture.CaptureSession
 import dev.drecorder.capture.RecordSettings
@@ -51,20 +56,35 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        val openRecordOnLaunch =
+            intent?.getBooleanExtra(CaptureService.EXTRA_OPEN_RECORD, false) == true
         setContent {
             DrecorderTheme {
-                DrecorderApp()
+                DrecorderApp(openRecordOnLaunch = openRecordOnLaunch)
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        AppVisibility.visible = true
+    }
+
+    override fun onStop() {
+        // The overlay only steps aside while one of our screens is visible.
+        AppVisibility.visible = false
+        super.onStop()
     }
 }
 
 private enum class Screen { Home, Record, Library, Settings, Update }
 
 @Composable
-private fun DrecorderApp() {
+private fun DrecorderApp(openRecordOnLaunch: Boolean) {
     val context = LocalContext.current
-    var screen by remember { mutableStateOf(Screen.Home) }
+    var screen by remember {
+        mutableStateOf(if (openRecordOnLaunch) Screen.Record else Screen.Home)
+    }
     val captureState by CaptureSession.state.collectAsState()
 
     // System back (button or gesture) must walk the in-app stack instead of finishing
@@ -86,6 +106,7 @@ private fun DrecorderApp() {
     val manifestUrl by remember { mutableStateOf(UpdateSettings.manifestUrl(context)) }
     var lastCheck by remember { mutableStateOf(UpdateSettings.lastCheckLabel(context)) }
     var canInstall by remember { mutableStateOf(false) }
+    var overlayPromptScope by remember { mutableStateOf<CaptureScope?>(null) }
     var recents by remember { mutableStateOf<List<Recording>>(emptyList()) }
     val library = remember(context) {
         RecordingLibrary(
@@ -191,13 +212,19 @@ private fun DrecorderApp() {
             notice = notice,
             onNoticeShown = { notice = null },
             onStartCapture = { scope ->
-                pendingScope = scope
-                permissionLauncher.launch(
-                    arrayOf(
-                        Manifest.permission.RECORD_AUDIO,
-                        Manifest.permission.POST_NOTIFICATIONS,
-                    ),
-                )
+                if (CaptureOverlay.canShow(context)) {
+                    pendingScope = scope
+                    permissionLauncher.launch(
+                        arrayOf(
+                            Manifest.permission.RECORD_AUDIO,
+                            Manifest.permission.POST_NOTIFICATIONS,
+                        ),
+                    )
+                } else {
+                    // The overlay is the only way back into a background recording, so
+                    // ask once instead of silently recording without a stop control.
+                    overlayPromptScope = scope
+                }
             },
             onOpenLibrary = { screen = Screen.Library },
             onOpenSettings = { screen = Screen.Settings },
@@ -206,7 +233,7 @@ private fun DrecorderApp() {
             onOpenRecording = { screen = Screen.Record },
         )
 
-        Screen.Record -> RecordScreen(onDone = { screen = Screen.Home })
+        Screen.Record -> RecordScreen(scope = pendingScope, onDone = { screen = Screen.Home })
 
         Screen.Library -> LibraryScreen(onBack = { screen = Screen.Home })
 
@@ -251,6 +278,32 @@ private fun DrecorderApp() {
             onAutoCheckChange = { enabled ->
                 UpdateSettings.storeAutoCheck(context, enabled)
                 if (enabled) coordinator.autoCheckIfDue()
+            },
+        )
+    }
+
+    overlayPromptScope?.let { scope ->
+        AlertDialog(
+            onDismissRequest = { overlayPromptScope = null },
+            title = { Text(stringResource(R.string.overlay_permission_title)) },
+            text = { Text(stringResource(R.string.overlay_permission_body)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    overlayPromptScope = null
+                    CaptureOverlay.requestPermission(context)
+                }) { Text(stringResource(R.string.overlay_permission_open)) }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    overlayPromptScope = null
+                    pendingScope = scope
+                    permissionLauncher.launch(
+                        arrayOf(
+                            Manifest.permission.RECORD_AUDIO,
+                            Manifest.permission.POST_NOTIFICATIONS,
+                        ),
+                    )
+                }) { Text(stringResource(R.string.overlay_permission_skip)) }
             },
         )
     }
