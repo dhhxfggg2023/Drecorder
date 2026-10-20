@@ -93,7 +93,7 @@ docs/         DESIGN.md（设计与平台事实）、update.json（自更新清�
 
 自更新要求「同签名才能覆盖安装」：`keystore.properties` + `release.jks` 均不入库（见 `.gitignore`），**必须异地备份**，丢失意味着所有用户只能卸载重装、录音数据丢失。
 
-发布分五步：构建 → 算 sha256 → 读签名证书 → 重写 `docs/update.json` → 建 GitHub Release。仓库当前**尚未配置 release 签名**，发布前会明确报错而不是产出一个装不上的包。
+发布分五步：构建 → 算 sha256 → 读签名证书 → 重写 `docs/update.json` → 建 GitHub Release。`keystore.properties` 与 `release.jks` 不入库，构建时若缺少签名材料会明确报错，而不是产出一个装不上的包。
 
 ## 许可
 
