@@ -75,27 +75,25 @@ adb shell pm grant dev.drecorder android.permission.POST_NOTIFICATIONS
 ```powershell
 adb shell ls -l /sdcard/Android/data/dev.drecorder/files/Music
 adb pull /sdcard/Android/data/dev.drecorder/files/Music/<文件> out.m4a
-python tools/inspect_m4a.py out.m4a
+ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_name,sample_rate,channels out.m4a
 ```
 
-`inspect_m4a.py` 打印时长、编码、采样率、声道数、`mdat` 大小与音轨数——时长要和实际录制时间一致，`mdat` 为 0 就说明没拿到数据。是否有声音最终以播放为准。
+`ffprobe` 打印时长、编码、采样率、声道数——时长要和实际录制时间一致，文件大小为 0 就说明没拿到数据。是否有声音最终以播放为准。
 
 ## 目录结构
 
 ```
-app/          Compose UI + 前台服务（CaptureService）
-core-audio/   采集引擎（ProjectionCaptureEngine、SegmentingWriter、AacM4aWriter/WavWriter、SilenceDetector）
+app/          Compose UI + 前台服务（CaptureService）+ 录音编辑器
+core-audio/   采集引擎（ProjectionCaptureEngine、SegmentingWriter、AacM4aWriter/WavWriter、SilenceDetector）+ 剪辑引擎（edit/）
 core-data/    录音库（扫目录 + 静音旁车标记）、已安装应用、更新清单解析
-docs/         DESIGN.md（设计与平台事实）、aegis/plans（实施计划）、update.json（自更新清单）
-scripts/      release.ps1（发布五步）
-tools/        inspect_m4a.py、make_icons.py
+docs/         DESIGN.md（设计与平台事实）、update.json（自更新清单）
 ```
 
 ## 发布与自更新（Publishing and self-update）
 
 自更新要求「同签名才能覆盖安装」：`keystore.properties` + `release.jks` 均不入库（见 `.gitignore`），**必须异地备份**，丢失意味着所有用户只能卸载重装、录音数据丢失。
 
-`scripts/release.ps1` 固定五步：构建 → 算 sha256 → 读签名证书 → 重写 `docs/update.json` → 建 GitHub Release。当前仓库**尚未配置 release 签名**，脚本会在第 1 步明确报错而不是产出一个装不上的包。
+发布分五步：构建 → 算 sha256 → 读签名证书 → 重写 `docs/update.json` → 建 GitHub Release。仓库当前**尚未配置 release 签名**，发布前会明确报错而不是产出一个装不上的包。
 
 ## 许可
 

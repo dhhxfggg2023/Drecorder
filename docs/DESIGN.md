@@ -159,7 +159,7 @@ API 37 给 `MediaProjectionConfig` 增加了 `Builder.setAudioRequested(boolean)
 ## 5. 模块与代码骨架
 
 ### 5.1 仓库结构（保持小，别一上来搞多模块）
-> 工具链已实测跑通，直接照用：**Gradle 9.6.1 + JDK 25.0.4（`D:\Android\Android Studio Preview\jbr`）+ AGP 9.4.0（内置 Kotlin，禁止 apply `org.jetbrains.kotlin.android`）+ `org.jetbrains.kotlin.plugin.compose` 2.2.10 + compileSdk 37 + buildToolsVersion 36.1.0 + minSdk 29 + targetSdk 36 + compose-bom 2026.09.00 + activity-compose 1.13.0 + core-ktx 1.19.1**；SDK 在 `D:\Android\Sdk`，`GRADLE_USER_HOME=D:\.gradle`；构建命令只能用 pwsh 通道（见 `docs/aegis/plans/2026-10-17-drecorder-m0-m4.md` §3）。compileSdk 取 37 是有意的：只有 API 37 才有 `MediaProjectionConfig.Builder.setAudioRequested()`。
+> 工具链已实测跑通，直接照用：**Gradle 9.6.1 + JDK 25.0.4（`D:\Android\Android Studio Preview\jbr`）+ AGP 9.4.0（内置 Kotlin，禁止 apply `org.jetbrains.kotlin.android`）+ `org.jetbrains.kotlin.plugin.compose` 2.2.10 + compileSdk 37 + buildToolsVersion 36.1.0 + minSdk 29 + targetSdk 36 + compose-bom 2026.09.00 + activity-compose 1.13.0 + core-ktx 1.19.1**；SDK 在 `D:\Android\Sdk`，`GRADLE_USER_HOME=D:\.gradle`；构建命令只能用 pwsh 通道。compileSdk 取 37 是有意的：只有 API 37 才有 `MediaProjectionConfig.Builder.setAudioRequested()`。
 ```
 Drecorder/
 ├─ app/                          # 单 Activity + Compose
@@ -403,7 +403,7 @@ Kotlin + **Jetpack Compose + Material 3**，单 Activity，无底部导航（功
 - **安装**：`FileProvider` 暴露 URI → `Intent(ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive").addFlags(FLAG_GRANT_READ_URI_PERMISSION)`；首次会弹「允许安装未知应用」→ 引导到 `ACTION_MANAGE_UNKNOWN_APP_SOURCES`。
 - **签名密钥必须固定并异地备份**：自更新依赖「同签名才能覆盖安装」，keystore 丢失或更换 = 用户只能卸载重装（录音数据全丢）。README 里写明，keystore 不入库。
 - **版本号纪律**：`versionCode` 单调递增整数，tag = `v<versionName>`；在 Gradle 里由 tag/versionName 自动推导 versionCode，禁止手工填。
-- **发布脚本** `scripts/release.ps1`：`assembleRelease` → 算 sha256 → 重写 `docs/update.json` → `gh release create vX.Y.Z --notes-file …` → 提交 `update.json`。五步固化，避免漏发清单导致「有 Release 但 App 查不到更新」。
+- **发布流程**（五步）：`assembleRelease` → 算 sha256 → 重写 `docs/update.json` → `gh release create vX.Y.Z --notes-file …` → 提交 `update.json`。五步固化，避免漏发清单导致「有 Release 但 App 查不到更新」。发布脚本是本地工具，不随仓库分发。
 - **手动兜底**：更新页永远提供「打开发布页」按钮（`ACTION_VIEW` 到 Releases），下载器或镜像失败时不会卡死。
 - **UI**：设置页一行「版本 1.2.3（检查更新）」；检测到新版本时在首页顶部出现一张卡（版本号 + 更新说明 + 下载/安装 + 进度），**不用弹窗打断**。
 
@@ -531,7 +531,7 @@ player.prepare(); player.play()
 ### 12.8 验收（真机）
 
 1. 30 分钟文件导入波形 **≤ 5 s**，主线程不卡顿
-2. 三段保留（0–12 s / 35–48 s / 60–90 s）导出后：时长 **≈ 55 s ±0.1 s**，`tools/inspect_m4a.py` 容器合法（duration / mp4a / 采样率 / 声道 / 1 track）
+2. 三段保留（0–12 s / 35–48 s / 60–90 s）导出后：时长 **≈ 55 s ±0.1 s**，导出文件容器合法（duration / mp4a / 采样率 / 声道 / 1 track）
 3. **导出耗时 < 10 s**（30 分钟源）。超过则说明 Transformer 悄悄转码了，必须查而不是接受
 4. 导出文件与预览听感一致；接缝处无可闻断裂
 5. 单测：`EditPlanner` 的 normalize / remove / complement 覆盖重叠、越界、全删、单点、逆序输入

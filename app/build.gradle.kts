@@ -7,7 +7,7 @@ plugins {
 
 // Release signing material never lives in the repository: keystore.properties and the
 // .jks are both gitignored. Without them the release build stays unsigned, which
-// scripts/release.ps1 refuses to publish.
+// the release pipeline refuses to publish.
 val keystorePropertiesFile = rootProject.file("keystore.properties")
 val keystoreProperties = Properties().apply {
     if (keystorePropertiesFile.exists()) {
@@ -24,7 +24,7 @@ android {
         applicationId = "dev.drecorder"
         minSdk = 29
         targetSdk = 36
-        // scripts/release.ps1 passes these; the defaults keep local builds working.
+        // The release pipeline passes these; the defaults keep local builds working.
         // A release whose versionCode was never bumped would download but never
         // install, because the verifier rejects a non-upgrade (DESIGN §11.3).
         versionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 1
