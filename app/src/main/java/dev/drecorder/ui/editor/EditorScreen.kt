@@ -75,6 +75,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * One recording being edited.
@@ -89,6 +90,8 @@ data class EditorSource(
     val peaks: PeakData? = null,
     val keep: List<KeepRange> = emptyList(),
     val loading: Boolean = false,
+    /** How far the waveform generation has got, 0..100; -1 when not known. */
+    val loadProgress: Int = -1,
     val loadError: String? = null,
 )
 
@@ -127,6 +130,10 @@ fun EditorScreen(
     var previewPlaying by remember { mutableStateOf(false) }
     var previewPositionMs by remember { mutableStateOf(0L) }
     var previewDurationMs by remember { mutableStateOf(0L) }
+
+    // The decoder checks this between chunks, so a long waveform generation can
+    // be stopped. It is reset for every source that is decoded.
+    val decodeCancelled = remember { AtomicBoolean(false) }
 
     // The viewport is shared by all sources so that a zoom level means the same
     // thing wherever the user looks.
@@ -184,9 +191,22 @@ fun EditorScreen(
                 sources = sources.replaceAt(index) { it.copy(peaks = cached.data) }
                 continue
             }
-            sources = sources.replaceAt(index) { it.copy(loading = true) }
+            sources = sources.replaceAt(index) { it.copy(loading = true, loadProgress = 0) }
             val decoded = withContext(Dispatchers.IO) {
-                PeakDecoder().decode(recording.file)
+                PeakDecoder().decode(
+                    recording.file,
+                    onProgress = { percent ->
+                        // Progress comes from the decoder thread, so it is
+                        // posted to the main thread; without it the UI would
+                        // read a stale value or touch state off-thread.
+                        scope.launch {
+                            sources = sources.replaceAt(index) {
+                                it.copy(loadProgress = percent)
+                            }
+                        }
+                    },
+                    cancelled = decodeCancelled,
+                )
             }
             sources = when (decoded) {
                 is PeakDecoder.Result.Success -> {
@@ -198,9 +218,23 @@ fun EditorScreen(
 
                 is PeakDecoder.Result.Failure ->
                     sources.replaceAt(index) {
-                        it.copy(loading = false, loadError = decoded.message)
+                        it.copy(
+                            loading = false,
+                            loadProgress = -1,
+                            loadError = when (decoded.reason) {
+                                PeakDecoder.Reason.Cancelled ->
+                                    context.getString(R.string.editor_waveform_cancelled)
+
+                                PeakDecoder.Reason.Stalled ->
+                                    context.getString(R.string.editor_waveform_stalled)
+
+                                PeakDecoder.Reason.Unknown -> decoded.message
+                            },
+                        )
                     }
             }
+            // The next source starts with a fresh cancel flag.
+            decodeCancelled.set(false)
         }
     }
 
@@ -385,9 +419,30 @@ fun EditorScreen(
                 ) {
                     when {
                         current == null -> Unit
-                        current.loading -> CircularProgressIndicator(
+                        current.loading -> Column(
                             modifier = Modifier.align(Alignment.Center),
-                        )
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            CircularProgressIndicator()
+                            if (current.loadProgress >= 0) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = stringResource(
+                                        R.string.editor_waveform_loading,
+                                        current.loadProgress,
+                                    ),
+                                    style = MaterialTheme.typography.labelMedium,
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            TextButton(
+                                onClick = {
+                                    decodeCancelled.set(true)
+                                },
+                            ) {
+                                Text(stringResource(R.string.common_cancel))
+                            }
+                        }
 
                         current.peaks == null -> Text(
                             text = current.loadError

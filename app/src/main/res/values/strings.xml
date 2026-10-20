@@ -153,6 +153,9 @@
     <string name="editor_exporting">正在导出 %1$d%%</string>
     <string name="editor_empty">没有可编辑的录音</string>
     <string name="editor_waveform_failed">无法生成波形</string>
+    <string name="editor_waveform_loading">正在生成波形 %1$d%%</string>
+    <string name="editor_waveform_stalled">解码器没有响应，请重试</string>
+    <string name="editor_waveform_cancelled">已取消生成波形</string>
     <string name="editor_delete_range">删除此段</string>
     <string name="editor_restore_range">恢复此段</string>
     <string name="editor_preview">试听</string>

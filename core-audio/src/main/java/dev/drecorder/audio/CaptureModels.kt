@@ -1,5 +1,6 @@
 package dev.drecorder.audio
 
+import dev.drecorder.audio.edit.PeakData
 import java.io.File
 
 /** Why a capture session ended. */
@@ -67,6 +68,14 @@ data class RecordingHandle(
     val stopReason: StopReason,
     val peakDbfs: Float,
     val everHadSignal: Boolean,
+    /**
+     * The waveform of every file, in the same order as [files].
+     *
+     * Computed while the audio was captured, so opening the editor does not
+     * have to decode the recording again (DESIGN §12.4). Empty when the
+     * session produced no data at all.
+     */
+    val peaks: List<PeakData> = emptyList(),
 ) {
     /** The most recent file, for callers that need to name a single one. */
     val file: File get() = files.last()

@@ -7,6 +7,9 @@ import android.media.AudioRecord
 import android.media.projection.MediaProjection
 import android.os.Handler
 import android.os.Looper
+import dev.drecorder.audio.edit.PeakBins
+import dev.drecorder.audio.edit.PeakData
+import dev.drecorder.audio.edit.PeakSplitter
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -59,6 +62,23 @@ class ProjectionCaptureEngine(
     val targetSilent: StateFlow<Boolean> = _targetSilent.asStateFlow()
 
     private val detector = SilenceDetector(silenceTimeoutMs = silenceTimeoutMs)
+
+    /**
+     * The waveform of this session, computed while the audio is captured.
+     *
+     * The captured PCM is already in memory as it is written to the file, so
+     * bucketing it costs almost nothing — and it saves the editor from having
+     * to decode the whole recording again when the user opens it (DESIGN
+     * §12.4). Without this, a 30 minute recording took minutes to draw.
+     */
+    private val peakBins = PeakBins(
+        sampleRate = format.sampleRate,
+        channelCount = format.channelCount,
+        bucketsPerSecond = PeakData.DEFAULT_BUCKETS_PER_SECOND,
+    )
+
+    /** How long each finished file was, in order. */
+    private val segmentDurationsMs = mutableListOf<Long>()
 
     private var projection: MediaProjection? = null
     private var recorder: AudioRecord? = null
@@ -114,6 +134,7 @@ class ProjectionCaptureEngine(
 
         recorder = audioRecord
         files.clear()
+        segmentDurationsMs.clear()
         writer = createWriter(bytesPerSecond)
         detector.reset()
         _targetSilent.value = false
@@ -150,12 +171,22 @@ class ProjectionCaptureEngine(
         releaseQuietly()
 
         val handle = if ((wasRunning || durationMs > 0L) && files.isNotEmpty()) {
+            // The waveform of the whole session, split into the files it was
+            // written to. Computing it here means the editor never has to
+            // decode the recording again (DESIGN §12.4).
+            val durations = if (segmentDurationsMs.isEmpty()) {
+                listOf(durationMs)
+            } else {
+                segmentDurationsMs.toList()
+            }
+            val peaks = PeakSplitter.split(peakBins.finish(), durations)
             RecordingHandle(
                 files = files.toList(),
                 durationMs = durationMs,
                 stopReason = stopReason,
                 peakDbfs = peak,
                 everHadSignal = peak > detector.thresholdDbfs,
+                peaks = peaks,
             )
         } else {
             null
@@ -198,6 +229,7 @@ class ProjectionCaptureEngine(
             segmentBytes = segmentDurationMs * bytesPerSecond / 1_000L,
             bytesPerSecond = bytesPerSecond.toLong(),
             open = open,
+            onSegmentClosed = { _, durationMs -> segmentDurationsMs += durationMs },
         )
     }
 
@@ -237,6 +269,10 @@ class ProjectionCaptureEngine(
                 detector.addSamples(samples, read, format.sampleRate, format.channelCount)
                 _level.value = levelFraction(detector.currentDbfs())
                 if (detector.isSilent()) _targetSilent.value = true
+
+                // The same samples that go into the file also fill the
+                // waveform's buckets.
+                peakBins.addPcm16(samples, read)
 
                 shortView.clear()
                 shortView.put(samples, 0, read)

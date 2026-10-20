@@ -21,7 +21,9 @@ import dev.drecorder.R
 import dev.drecorder.audio.AudioFormatSpec
 import dev.drecorder.audio.CaptureScope
 import dev.drecorder.audio.ProjectionCaptureEngine
+import dev.drecorder.audio.RecordingHandle
 import dev.drecorder.audio.StopReason
+import dev.drecorder.audio.edit.PeaksCache
 import dev.drecorder.data.SilentMarker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -171,9 +173,23 @@ class CaptureService : Service() {
             // Every slice of a segmented session gets one.
             val marker = SilentMarker(this)
             handle.files.forEach { file -> marker.write(file.name, wasSilent = !handle.everHadSignal) }
+
+            // The waveform was computed while the audio was captured, so it is
+            // written to the cache now. The editor then opens instantly instead
+            // of decoding the whole recording again (DESIGN §12.4).
+            writePeaks(handle)
         }
         CaptureSession.onFinished(handle)
         shutdown()
+    }
+
+    /** Writes the cached waveform of every file the session produced. */
+    private fun writePeaks(handle: RecordingHandle) {
+        handle.peaks.forEachIndexed { index, peaks ->
+            val file = handle.files.getOrNull(index) ?: return@forEachIndexed
+            val target = PeaksCache.fileFor(file, filesDir)
+            runCatching { PeaksCache.write(target, peaks, file) }
+        }
     }
 
     private fun shutdown() {
