@@ -402,8 +402,8 @@ Kotlin + **Jetpack Compose + Material 3**，单 Activity，无底部导航（功
   三条全过才提示安装；任一条不过 → 删除文件并报错（不要「忽略继续」）。
 - **安装**：`FileProvider` 暴露 URI → `Intent(ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive").addFlags(FLAG_GRANT_READ_URI_PERMISSION)`；首次会弹「允许安装未知应用」→ 引导到 `ACTION_MANAGE_UNKNOWN_APP_SOURCES`。
 - **签名密钥必须固定并异地备份**：自更新依赖「同签名才能覆盖安装」，keystore 丢失或更换 = 用户只能卸载重装（录音数据全丢）。README 里写明，keystore 不入库。
-- **版本号纪律**：`versionCode` 单调递增整数，tag = `v<versionName>`；在 Gradle 里由 tag/versionName 自动推导 versionCode，禁止手工填。
-- **发布流程**（五步）：`assembleRelease` → 算 sha256 → 重写 `docs/update.json` → `gh release create vX.Y.Z --notes-file …` → 提交 `update.json`。五步固化，避免漏发清单导致「有 Release 但 App 查不到更新」。发布脚本是本地工具，不随仓库分发。
+- **版本号纪律**：`versionCode` 单调递增整数，tag = `v<versionName>`；构建时显式传入 `-PversionCode=N -PversionName=X.Y.Z`（`app/build.gradle.kts` 从 project property 读取），发布前必须比对上一个已发布版本确认递增。
+- **发布流程**（五步）：`assembleRelease`（带 `-PversionCode/-PversionName`）→ 算 sha256 → 读签名证书 SHA-256 → 重写 `docs/update.json` → 建 GitHub Release（tag 指向同一 commit，APK 作为 asset 上传）→ 提交 `update.json`。五步固化，避免漏发清单导致「有 Release 但 App 查不到更新」。发布脚本是本地工具，不随仓库分发。
 - **手动兜底**：更新页永远提供「打开发布页」按钮（`ACTION_VIEW` 到 Releases），下载器或镜像失败时不会卡死。
 - **UI**：设置页一行「版本 1.2.3（检查更新）」；检测到新版本时在首页顶部出现一张卡（版本号 + 更新说明 + 下载/安装 + 进度），**不用弹窗打断**。
 
