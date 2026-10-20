@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.GraphicEq
@@ -65,6 +66,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import dev.drecorder.R
 import dev.drecorder.capture.RecordSettings
+import dev.drecorder.data.DerivedMarker
 import dev.drecorder.data.Recording
 import dev.drecorder.data.RecordingLibrary
 import dev.drecorder.data.SilentMarker
@@ -86,7 +88,11 @@ import java.io.File
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LibraryScreen(onBack: () -> Unit) {
+fun LibraryScreen(
+    onBack: () -> Unit,
+    onEdit: (List<Recording>) -> Unit = {},
+    editingDisabled: Boolean = false,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -98,6 +104,7 @@ fun LibraryScreen(onBack: () -> Unit) {
                 RecordSettings.outputDirectory(context)?.let(::File) ?: defaultOutputDirectory(context)
             },
             marker = SilentMarker(context),
+            derivedMarker = DerivedMarker(context),
         )
     }
 
@@ -116,6 +123,8 @@ fun LibraryScreen(onBack: () -> Unit) {
     val openFailed = stringResource(R.string.library_open_failed)
     val deleted = stringResource(R.string.library_deleted)
     val deleteFailed = stringResource(R.string.library_delete_failed)
+    val mergeNeedTwo = stringResource(R.string.library_merge_need_two)
+    val editBusy = stringResource(R.string.library_edit_busy)
 
     suspend fun reload() {
         loading = true
@@ -158,7 +167,8 @@ fun LibraryScreen(onBack: () -> Unit) {
 
     fun deleteRecordings(targets: List<Recording>) {
         if (targets.isEmpty()) return
-        if (playingPath in targets.map { it.file.absolutePath }) {
+        val playing = playingPath
+        if (playing != null && targets.any { it.file.absolutePath == playing }) {
             player.stop()
             playingPath = null
         }
@@ -224,6 +234,22 @@ fun LibraryScreen(onBack: () -> Unit) {
                             enabled = selected.isNotEmpty(),
                         ) {
                             Text(stringResource(R.string.library_delete))
+                        }
+                        // Merging is a multi-select action, so it lives in the same
+                        // toolbar the selection already opened — no second entry
+                        // point to discover.
+                        TextButton(
+                            onClick = {
+                                val targets = recordings.filter { it.displayName in selected }
+                                if (targets.size < 2) {
+                                    notify(mergeNeedTwo)
+                                } else {
+                                    onEdit(targets)
+                                }
+                            },
+                            enabled = selected.size >= 2 && !editingDisabled,
+                        ) {
+                            Text(stringResource(R.string.library_merge))
                         }
                     } else if (recordings.isNotEmpty()) {
                         TextButton(onClick = { selectionMode = true }) {
@@ -304,7 +330,15 @@ fun LibraryScreen(onBack: () -> Unit) {
                                 }
                             },
                             onRename = { pendingRename = recording },
+                            onEdit = {
+                                if (editingDisabled) {
+                                    notify(editBusy)
+                                } else {
+                                    onEdit(listOf(recording))
+                                }
+                            },
                             onDelete = { pendingDelete = recording },
+                            editingDisabled = editingDisabled,
                         )
                         HorizontalDivider(
                             modifier = Modifier.padding(start = 72.dp),
@@ -439,7 +473,9 @@ private fun RecordingRow(
     onSeek: (Long) -> Unit,
     onShare: () -> Unit,
     onRename: () -> Unit,
+    onEdit: () -> Unit,
     onDelete: () -> Unit,
+    editingDisabled: Boolean = false,
 ) {
     var menuVisible by remember { mutableStateOf(false) }
     var dragValue by remember(recording.displayName) { mutableStateOf<Float?>(null) }
@@ -513,6 +549,23 @@ private fun RecordingRow(
                         )
                     }
                 }
+                if (recording.wasEdited) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .background(
+                                MaterialTheme.colorScheme.secondaryContainer,
+                                MaterialTheme.shapes.extraSmall,
+                            )
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.library_edited_badge),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        )
+                    }
+                }
             }
             if (isPlaying && !selectionMode) {
                 Row(
@@ -564,6 +617,12 @@ private fun RecordingRow(
                         text = { Text(stringResource(R.string.library_rename)) },
                         leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
                         onClick = { menuVisible = false; onRename() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.library_edit)) },
+                        leadingIcon = { Icon(Icons.Filled.ContentCut, contentDescription = null) },
+                        onClick = { menuVisible = false; onEdit() },
+                        enabled = !editingDisabled,
                     )
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.library_delete)) },

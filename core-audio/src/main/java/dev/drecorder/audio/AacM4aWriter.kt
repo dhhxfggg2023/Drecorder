@@ -20,6 +20,15 @@ class AacM4aWriter(
     private companion object {
         const val TIMEOUT_US = 10_000L
         const val MAX_DRAIN_ROUNDS = 400
+
+        /**
+         * How many times the writer waits for the encoder before giving up.
+         *
+         * Each round waits [TIMEOUT_US] for a free input buffer, so this is roughly
+         * 20 seconds of a completely stuck encoder before the writer gives up. A
+         * healthy encoder frees a buffer after one drain.
+         */
+        const val MAX_INPUT_STALLS = 2_000
     }
 
     private val codec: MediaCodec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
@@ -51,10 +60,17 @@ class AacM4aWriter(
         check(!closed) { "writer already closed" }
         var offset = 0
         while (offset < size) {
-            val inputIndex = codec.dequeueInputBuffer(TIMEOUT_US)
-            if (inputIndex < 0) break
+            val inputIndex = acquireInputBuffer()
+            if (inputIndex < 0) {
+                // The encoder never accepted input again. Throwing is deliberate:
+                // silently dropping the rest of this chunk would leave a recording
+                // that is shorter than the session that produced it, with nothing
+                // in the file or the UI to say so.
+                throw IllegalStateException("AAC encoder stopped accepting input")
+            }
 
-            val input = codec.getInputBuffer(inputIndex) ?: break
+            val input = codec.getInputBuffer(inputIndex)
+                ?: throw IllegalStateException("AAC encoder returned no input buffer")
             input.clear()
             val chunk = minOf(input.capacity(), size - offset)
             input.put(pcm, offset, chunk)
@@ -64,6 +80,25 @@ class AacM4aWriter(
             offset += chunk
             drain()
         }
+    }
+
+    /**
+     * Waits for a free input buffer, freeing output buffers while it waits.
+     *
+     * The encoder refuses input while its output queue is full — that is normal
+     * whenever the encoder is busier than the capture loop. The PCM that cannot be
+     * handed over must not be lost, so the writer drains the encoder instead of
+     * returning "no buffer" to the caller.
+     */
+    private fun acquireInputBuffer(): Int {
+        var stalls = 0
+        while (stalls < MAX_INPUT_STALLS) {
+            val index = codec.dequeueInputBuffer(TIMEOUT_US)
+            if (index >= 0) return index
+            stalls++
+            drainOutput(TIMEOUT_US)
+        }
+        return -1
     }
 
     /** Flushes the encoder and finishes the container. Returns the audio duration in ms. */
@@ -102,12 +137,29 @@ class AacM4aWriter(
         }
     }
 
+    /**
+     * Frees encoder output while the writer waits for room on the input side.
+     *
+     * The encoder cannot take new input while its output queue is full, so the
+     * output has to be handed to the muxer to unblock it. This is the counterpart
+     * of [acquireInputBuffer]: without it a busy encoder makes the writer drop
+     * audio, and without that the recording is quietly shorter than the session.
+     */
+    private fun drainOutput(timeoutUs: Long) {
+        val outputIndex = codec.dequeueOutputBuffer(bufferInfo, timeoutUs)
+        if (outputIndex >= 0 || outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+            handleOutput(outputIndex)
+        }
+    }
+
     private fun drainUntilEndOfStream() {
         var rounds = 0
         while (rounds++ < MAX_DRAIN_ROUNDS) {
             val outputIndex = codec.dequeueOutputBuffer(bufferInfo, TIMEOUT_US)
             if (outputIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                if (rounds > 4) return
+                // The encoder is still working on what it was given. Giving up
+                // early here would cut the tail of the recording off, so the loop
+                // keeps waiting until the end-of-stream marker arrives.
                 continue
             }
             if (!handleOutput(outputIndex)) return

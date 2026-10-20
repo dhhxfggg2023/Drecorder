@@ -412,6 +412,133 @@ Kotlin + **Jetpack Compose + Material 3**，单 Activity，无底部导航（功
 
 ---
 
+## 12. 录音文件编辑（2026-10-20 新增需求）
+
+目标：录完之后能**删减**和**合并**，并且象普通录音机那样**看见波形**。
+
+### 12.1 结论与硬约束
+
+| 问题 | 结论 |
+| --- | --- |
+| 能不能不重编码就剪 | **能**。所有产物都是 AAC-LC in MP4，剪切 = 按样本表重排 `stts/stsz/stco`，**零音质损失** |
+| 剪切精度 | AAC 帧 = 1024 samples，48 kHz 下 **±21 ms**。对节目剪辑足够；不做采样级精确剪切 |
+| 合并的前提 | **同编码 / 同采样率 / 同声道数**。不一致时**明确拒绝并指出是哪几条**，不静默重编码 |
+| 用什么实现 | `androidx.media3:media3-transformer:1.11.1`（与已有 `media3-exoplayer:1.11.1` 同版本线，Google Maven 存在），走 **transmux**（不转码） |
+| 预览 | `CompositionPlayer`（media3 1.9.0+，支持单序列顺序预览），**与导出用同一个 `Composition` 对象** |
+| 被否决 | 自己写 MP4 样本表编辑器（400–600 行 + `esds/stts` 边界，重复 Google 已踩过的坑）；解码→重编码（每编辑一次降一次音质，30 分钟音频要 1–3 分钟） |
+
+### 12.2 删减模型：保留区间列表（用户 2026-10-20 选定方案 C）
+
+```kotlin
+data class KeepRange(val startMs: Long, val endMs: Long)   // [start, end)
+
+data class SourceSpan(val file: File, val durationMs: Long, val keep: List<KeepRange>)
+
+data class EditPlan(val sources: List<SourceSpan>)          // 合并 = 多个 source
+```
+
+一个 `EditPlan` 编译成 media3 的
+
+```
+EditedMediaItemSequence.withAudioFrom(
+    sources.flatMap { src -> src.keep.map { clip(src.file, it) } }
+)
+```
+
+其中 `clip()` = `EditedMediaItem.Builder(MediaItem.fromUri(...))`
+`.setClippingConfiguration(ClippingConfiguration.Builder().setStartPositionMs(...).setEndPositionMs(...).build())`
+`.setDurationUs(...)` ← **必须显式设置**，`CompositionPlayer` 文档要求 audio item 带 `duration`。
+
+- **删除** = 从 `keep` 里挖掉 `[a,b)`，可能把一段裂成两段；段数不限，可反复删
+- **恢复** = 把段加回 `keep`
+- **合并** = 多条文件各自的 `keep`，继续往同一个 sequence 追加
+- **全部删光** = 拒绝导出，提示「至少保留一段」
+- **不支持**交叉淡入淡出（media3 明确列在 limitations），我们做硬切，不需要
+
+> **必须调用 `Composition.Builder.setTransmuxAudio(true)`**。media3 的默认行为是：`Composition` 里有**多个 `MediaItem` 时，所有音轨默认被转码**（转码 = 音质降一级 + 30 分钟音频要 1–3 分钟）。只有显式开 transmux 才是「不转码、只重排样本」。这也是「零音质损失」这个卖点的技术开关所在。
+> 代价：transmux 要求各 `MediaItem` 的音轨**采样格式一致**（同编码/同采样率/同声道），且不能带任何 audio effect——所以我们不提供淡入淡出。
+> 参考：[Composition.Builder 文档](https://developer.android.com/reference/androidx/media3/transformer/Composition.Builder)
+
+#### 纯函数边界（可单测，不需要设备）
+
+`core-audio/src/main/java/dev/drecorder/audio/edit/EditPlanner.kt` 只做三件事，风格对齐现有 `RecordingDay` / `newestFirst()`：
+
+- `normalize(keep, durationMs)`：排序 → 合并重叠/相邻 → 夹到 `[0, duration]` → 丢弃空区间
+- `remove(keep, fromMs, toMs)`：挖洞，返回新列表
+- `complement(keep, durationMs)`：反推被删区间，供波形灰显
+
+**方案 C 的复杂度全部关在这三个纯函数里**，UI 只负责拖拽和画。
+
+### 12.3 输出（派生文件，不覆盖原文件）
+
+| 项 | 规则 |
+| --- | --- |
+| 命名 | `<原名>-edit-<n>.m4a`，`n` 从 1 递增，取第一个不存在的序号 |
+| 原文件 | **永不修改、永不删除**。撤销 = 删掉派生文件，不需要 op log |
+| 磁盘代价 | 30 分钟录音约 40 MB，可接受 |
+| 原子性 | 先写 `<name>.tmp`，成功后才 rename；中断不留半截文件 |
+| 静音标记 | 派生文件的 `.silent` 旁车**重新测定**（导出时本来就在解包），不继承源文件 |
+| 库里的标识 | `RecordingLibrary` 读取派生标记，列表上显示「已编辑」 |
+
+### 12.4 波形子系统
+
+| 层 | 做法 |
+| --- | --- |
+| 解码 | `MediaExtractor` + `MediaCodec` 解成 PCM16，按桶取 min/max |
+| 缓存 | `<baseName>.peaks` 存 `filesDir`（**不放录音目录**，避免被库扫成录音）；**100 桶/秒** |
+| 体积 | 30 分钟 48 kHz 立体声 ≈ **352 KB**；首次解析 2–4 s（带进度），之后秒开 |
+| 深度缩放 | 超出缓存分辨率时**只重新解码当前可见窗口**（几秒音频，约 50 ms），不存细粒度全量缓存 |
+| 渲染 | Compose `Canvas`，每桶一根竖线，高度 = 峰值。**静音段自然成一条平线** |
+| 时间轴 | **永远对应原始文件**；被删区间**变灰划掉留在原位**，可随时反悔恢复 |
+
+#### 交互
+
+- 横向拖动 = 平移；双指捏合 = 缩放（重新分桶）
+- 在波形上拖出一段 = 选中，选中区反色
+- 选中后底部出「删除此段 / 试听此段 / 恢复」
+- 顶部时间刻度（`00:00 / 05:00 / …`）+ 跟随播放的播放头
+
+#### 自动吸附（用户 2026-10-20 确认默认开启）
+
+拖手柄时在 **±2 s** 内找能量最低点吸附，可开关。理由：用户不需要精确到毫秒，他要的是「去掉片头那段废话」，而静音段（切歌、暂停、换气）正好是天然切点。
+
+### 12.5 预览
+
+```kotlin
+val player = CompositionPlayer.Builder(context).build()
+player.setComposition(composition)   // 与导出完全相同的对象
+player.prepare(); player.play()
+```
+
+- 新增 `app/.../playback/CompositionPreviewPlayer.kt`；现有 `RecordingPlayer.kt` **不动**（列表页普通播放保持原样）
+- 编辑器里播放 = 直接听最终效果，接缝处即最终接缝
+- `CompositionPlayer` 限制：`repeatMode` 只支持 `OFF` / `ALL`；只用单序列（纯音频），无需 `MultipleInputVideoGraph`
+
+### 12.6 入口与并发约束
+
+- `LibraryScreen` 行尾 ⋮ →「编辑」
+- `LibraryScreen` **已有多选模式**（全选/批量删除）→ 直接在其中加「合并」，**不新造入口**
+- 录制进行中（`CaptureService` 正在写同一目录）**禁止进编辑器**
+- 编辑前释放 ExoPlayer 持有的文件句柄（部分 ROM 上不释放会导致 rename/delete 失败）
+
+### 12.7 已知风险
+
+1. **接缝处的编码器延迟**：AAC 有 priming samples，多段拼接理论上会引入 20–45 ms 间隙。真机上必须实际听接缝。
+2. **media3 音频拼接有已知 issue**（[#1658](https://github.com/androidx/media/issues/1658)），纯音频场景是否受影响文档未说明，必须真机验证。
+3. **APK 体积**：`media3-transformer` + 传递依赖，估计 +1~2 MB，未实测。
+4. **风险 1/2 共同指向同一个动作**：先做技术探针（用一段真实录音跑通「裁剪 + 拼接 + 导出」），验完 §12.8 的 1/2/3 再动 UI。
+
+### 12.8 验收（真机）
+
+1. 30 分钟文件导入波形 **≤ 5 s**，主线程不卡顿
+2. 三段保留（0–12 s / 35–48 s / 60–90 s）导出后：时长 **≈ 55 s ±0.1 s**，`tools/inspect_m4a.py` 容器合法（duration / mp4a / 采样率 / 声道 / 1 track）
+3. **导出耗时 < 10 s**（30 分钟源）。超过则说明 Transformer 悄悄转码了，必须查而不是接受
+4. 导出文件与预览听感一致；接缝处无可闻断裂
+5. 单测：`EditPlanner` 的 normalize / remove / complement 覆盖重叠、越界、全删、单点、逆序输入
+6. 全部删光 → 拒绝导出且提示正确；格式不一致合并 → 报错并点名是哪几条
+
+---
+
 ## 附：参考来源
 
 - [Capture video and audio playback（AudioPlaybackCapture 全文）](https://developer.android.com/media/platform/av-capture)

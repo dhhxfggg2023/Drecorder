@@ -39,6 +39,7 @@ import dev.drecorder.data.Recording
 import dev.drecorder.data.RecordingLibrary
 import dev.drecorder.data.SilentMarker
 import dev.drecorder.ui.DrecorderTheme
+import dev.drecorder.ui.editor.EditorScreen
 import dev.drecorder.ui.home.HomeScreen
 import dev.drecorder.ui.library.LibraryScreen
 import dev.drecorder.ui.library.defaultOutputDirectory
@@ -74,7 +75,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Screen { Home, Library, Settings, Update }
+private enum class Screen { Home, Library, Settings, Update, Editor }
 
 @Composable
 private fun DrecorderApp() {
@@ -85,7 +86,9 @@ private fun DrecorderApp() {
     // System back (button or gesture) must walk the in-app stack instead of finishing
     // the activity: this is one activity with five screens, so there is no framework
     // back stack to pop.
-    BackHandler(enabled = screen != Screen.Home) { screen = Screen.Home }
+    BackHandler(enabled = screen != Screen.Home) {
+        screen = if (screen == Screen.Editor) Screen.Library else Screen.Home
+    }
 
     var pendingScope by remember { mutableStateOf<CaptureScope>(CaptureScope.AllMedia) }
     var notice by remember { mutableStateOf<String?>(null) }
@@ -107,6 +110,9 @@ private fun DrecorderApp() {
     var pendingStartScope by remember { mutableStateOf<CaptureScope?>(null) }
     var overlayPrompt by remember { mutableStateOf(false) }
     var recordingCount by remember { mutableStateOf(0) }
+    // The recordings the editor is working on. One entry means a trim, several
+    // mean a merge — the editor does not need a separate mode for it.
+    var editingTargets by remember { mutableStateOf<List<Recording>>(emptyList()) }
     val library = remember(context) {
         RecordingLibrary(
             directoryProvider = {
@@ -153,6 +159,7 @@ private fun DrecorderApp() {
     val dirUnwritable = stringResource(R.string.settings_dir_unwritable)
     val savedNotice = stringResource(R.string.settings_saved)
     val installPermissionMissing = stringResource(R.string.update_permission_missing)
+    val editBusyNotice = stringResource(R.string.library_edit_busy)
 
     // AAC support is a device property, not a setting: probe it once.
     val projectionLauncher = rememberLauncherForActivityResult(
@@ -256,7 +263,26 @@ private fun DrecorderApp() {
             recordingCount = recordingCount,
         )
 
-        Screen.Library -> LibraryScreen(onBack = { screen = Screen.Home })
+        Screen.Library -> LibraryScreen(
+            onBack = { screen = Screen.Home },
+            onEdit = { targets ->
+                // Editing while a capture is running would have two decoders and a
+                // muxer competing for the same audio stack; the library disables the
+                // entry point instead of failing here.
+                if (captureState is CaptureState.Recording) {
+                    notice = editBusyNotice
+                } else {
+                    editingTargets = targets
+                    screen = Screen.Editor
+                }
+            },
+            editingDisabled = captureState is CaptureState.Recording,
+        )
+
+        Screen.Editor -> EditorScreen(
+            recordings = editingTargets,
+            onBack = { screen = Screen.Library },
+        )
 
         Screen.Settings -> SettingsScreen(
             settings = settings,

@@ -139,6 +139,28 @@
     <string name="library_silent_badge">无声音</string>
     <string name="library_playback_failed">无法播放这个文件</string>
     <string name="library_open_failed">没有找到可用的播放器</string>
+    <string name="library_edit">编辑</string>
+    <string name="library_merge">合并</string>
+    <string name="library_merge_need_two">至少选择两条录音才能合并</string>
+    <string name="library_edited_badge">已编辑</string>
+    <string name="library_edit_busy">正在录制，暂时不能编辑录音</string>
+
+    <string name="editor_title">编辑录音</string>
+    <string name="editor_title_merged">合并 %1$d 段录音</string>
+    <string name="editor_kept_length">保留 %1$s</string>
+    <string name="editor_export">导出</string>
+    <string name="editor_exported">已导出 %1$s</string>
+    <string name="editor_exporting">正在导出 %1$d%%</string>
+    <string name="editor_empty">没有可编辑的录音</string>
+    <string name="editor_waveform_failed">无法生成波形</string>
+    <string name="editor_delete_range">删除此段</string>
+    <string name="editor_restore_range">恢复此段</string>
+    <string name="editor_preview">试听</string>
+    <string name="editor_preview_failed">试听失败</string>
+    <string name="editor_position">%1$s / %2$s</string>
+    <string name="editor_snap_on">吸附到静音：开</string>
+    <string name="editor_snap_off">吸附到静音：关</string>
+    <string name="editor_format_mismatch">格式不一致，无法合并：%1$s</string>
 
     <string name="update_title">检查更新</string>
     <string name="update_check">检查更新</string>

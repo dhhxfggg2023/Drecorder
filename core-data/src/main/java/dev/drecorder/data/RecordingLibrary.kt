@@ -18,6 +18,7 @@ data class Recording(
     val sizeBytes: Long,
     val modifiedAtMillis: Long,
     val wasSilent: Boolean,
+    val wasEdited: Boolean = false,
 ) {
     val displayName: String get() = file.name
 }
@@ -102,6 +103,7 @@ fun formatDuration(millis: Long): String {
 class RecordingLibrary(
     private val directoryProvider: () -> File?,
     private val marker: SilentMarker,
+    private val derivedMarker: DerivedMarker? = null,
 ) {
 
     fun recordings(): List<Recording> {
@@ -118,12 +120,14 @@ class RecordingLibrary(
                 sizeBytes = file.length(),
                 modifiedAtMillis = file.lastModified(),
                 wasSilent = marker.isSilent(file.name),
+                wasEdited = derivedMarker?.isDerived(file.name) == true,
             )
         }.newestFirst()
     }
 
     fun delete(recording: Recording): Boolean {
         marker.clear(recording.displayName)
+        derivedMarker?.clear(recording.displayName)
         return runCatching { recording.file.delete() }.getOrDefault(false)
     }
 
@@ -131,9 +135,15 @@ class RecordingLibrary(
         val target = File(recording.file.parentFile, newDisplayName)
         if (target.exists()) return false
         val renamed = runCatching { recording.file.renameTo(target) }.getOrDefault(false)
-        if (renamed && recording.wasSilent) {
-            marker.clear(recording.displayName)
-            marker.write(newDisplayName, wasSilent = true)
+        if (renamed) {
+            if (recording.wasSilent) {
+                marker.clear(recording.displayName)
+                marker.write(newDisplayName, wasSilent = true)
+            }
+            if (recording.wasEdited) {
+                derivedMarker?.clear(recording.displayName)
+                derivedMarker?.markDerived(newDisplayName)
+            }
         }
         return renamed
     }
