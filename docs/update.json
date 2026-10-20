@@ -3,13 +3,13 @@
     "mirrors":  [
 
                 ],
-    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.2.0/drecorder-0.2.0.apk",
-    "releaseNotes":  "录音编辑：录完能看波形、拖选删除、合并多条录音（不重编码，零音质损失）。",
-    "publishedAt":  "2026-10-20T12:00:53Z",
+    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.2.1/drecorder-0.2.1.apk",
+    "releaseNotes":  "修复编辑器波形一直转圈：新录音秒开波形，老录音生成波形时显示百分比、可取消。",
+    "publishedAt":  "2026-10-20T13:50:00Z",
     "signingCertSha256":  "4f070db7fd59b883e7ab771f88cda4bc80ce3b97e1defcf9e7faeab5a496a348",
-    "sha256":  "6b177c7eb0d8e7717270888a517bdd4e3af21e078a59db1f05cbfb2d253e04cd",
+    "sha256":  "124cb94172b60b1fc01d0d73adffba8567ab1322997689fddfb533a57a560c73",
     "force":  false,
-    "versionName":  "0.2.0",
-    "versionCode":  3,
-    "sizeBytes":  52909216
+    "versionName":  "0.2.1",
+    "versionCode":  4,
+    "sizeBytes":  52926884
 }
