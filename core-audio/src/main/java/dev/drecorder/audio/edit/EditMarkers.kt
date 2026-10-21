@@ -95,6 +95,13 @@ object EditMarkers {
      * the file would bound a segment that does not exist.
      */
     fun move(markers: List<Long>, fromMs: Long, toMs: Long, totalMs: Long): List<Long> {
+        // A drag reports the marker it grabbed on every pointer event, but the
+        // marker's own time changes as it moves. Once it has left [fromMs] the
+        // gesture is still talking about the marker that was grabbed, and the
+        // only honest answer is "nothing to move": treating the stale time as
+        // a new marker would add one per pointer event, which is how a single
+        // drag used to drop a hundred cut points on the recording.
+        if (!markers.contains(fromMs)) return markers
         val total = totalMs.coerceAtLeast(0L)
         val target = toMs.coerceIn(0L, total)
         if (target == fromMs) return markers

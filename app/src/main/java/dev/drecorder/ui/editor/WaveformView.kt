@@ -50,10 +50,14 @@ import kotlin.math.roundToLong
  * to it, and dragging it moves the recording under the finger (DESIGN §12.4).
  *
  * Gestures:
- * - one finger drags the waveform, and the playhead follows the finger;
- * - one finger on the playhead scrubs it;
+ * - one finger drags the recording, which moves the playhead through time;
  * - one finger on a marker drags that marker;
  * - two fingers pan and zoom.
+ *
+ * There is no gesture that drags the playhead itself, because the playhead is
+ * not a thing on the screen: it is the anchor. Every gesture changes the
+ * moment the anchor stands at, and the window is derived from it, so the red
+ * line can never move (DESIGN §12.4).
  *
  * The viewport is owned by the editor screen: two sources edited in one
  * session share one window, so the gesture is reported upwards as a request
@@ -68,9 +72,8 @@ fun WaveformView(
     removed: List<KeepRange>,
     markers: List<Long>,
     playheadMs: Long?,
-    onScrub: (ms: Long) -> Unit,
-    onTimelineDrag: (grabbedMs: Long, targetMs: Long) -> Unit,
-    onMarkerDrag: (fromMs: Long, toMs: Long) -> Unit,
+    onTimelineDrag: (playheadDeltaMs: Long) -> Unit,
+    onMarkerDrag: (fromMs: Long, toMs: Long) -> Long,
     onViewportGesture: (zoomFactor: Float, panFraction: Float, focusFraction: Float) -> Unit,
     onDraggingChanged: (dragging: Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
@@ -93,8 +96,6 @@ fun WaveformView(
     val currentSpan by rememberUpdatedState(spanMs)
     val currentWidth by rememberUpdatedState(widthPx)
     val currentMarkers by rememberUpdatedState(markers)
-    val currentPlayhead by rememberUpdatedState(playheadMs)
-    val scrub by rememberUpdatedState(onScrub)
     val timelineDrag by rememberUpdatedState(onTimelineDrag)
     val markerDrag by rememberUpdatedState(onMarkerDrag)
     val viewportGesture by rememberUpdatedState(onViewportGesture)
@@ -120,10 +121,11 @@ fun WaveformView(
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
-                    val anchorMs = timeAt(down.position.x, currentWidth, currentStart, currentSpan)
 
-                    // What the finger grabbed decides what the drag does:
-                    // the playhead, a marker, or the waveform itself.
+                    // What the finger grabbed decides what the drag does: a
+                    // marker, or the recording itself. There is no third case:
+                    // the playhead cannot be grabbed, because it is the anchor
+                    // and never moves (DESIGN §12.4).
                     val grabbedMarker = hitMarker(
                         down.position.x,
                         currentWidth.toFloat(),
@@ -131,19 +133,13 @@ fun WaveformView(
                         currentSpan,
                         currentMarkers,
                     )
-                    val grabbedPlayhead = currentPlayhead?.let { head ->
-                        abs(
-                            msToX(
-                                head,
-                                currentWidth.toFloat(),
-                                currentStart,
-                                currentSpan,
-                            ) - down.position.x,
-                        ) <= PLAYHEAD_HIT_PX
-                    } ?: false
-
+                    // A dragged marker's own time changes as it moves, so the
+                    // gesture has to carry its current time: reporting the
+                    // grabbed time every event would look like a brand new
+                    // marker each time.
+                    var markerNowMs: Long? = grabbedMarker
+                    var lastX = down.position.x
                     var mode = GestureMode.UNDECIDED
-                    var draggedMarker: Long? = null
 
                     while (true) {
                         val event = awaitPointerEvent()
@@ -169,63 +165,47 @@ fun WaveformView(
                             pressed.forEach { it.consume() }
                         } else {
                             val change = pressed.first()
+                            val dx = change.position.x - lastX
+                            lastX = change.position.x
                             if (mode == GestureMode.UNDECIDED &&
                                 abs(change.position.x - down.position.x) > viewConfiguration.touchSlop
-                            ) {                                mode = GestureMode.DRAG
+                            ) {
+                                mode = GestureMode.DRAG
                             }
                             if (mode == GestureMode.DRAG) {
-                                when {
-                                    grabbedMarker != null -> {
-                                        // A marker is dragged to the finger.
-                                        draggedMarker = grabbedMarker
-                                        val target = timeAt(
-                                            change.position.x,
-                                            currentWidth,
-                                            currentStart,
-                                            currentSpan,
-                                        )
-                                        markerDrag(grabbedMarker, target)
-                                    }
-
-                                    grabbedPlayhead -> {
-                                        // The playhead is scrubbed.
-                                        scrub(timeAt(
-                                            change.position.x,
-                                            currentWidth,
-                                            currentStart,
-                                            currentSpan,
-                                        ))
-                                    }
-
-                                    else -> {
-                                        // The waveform itself is dragged: the
-                                        // moment the user grabbed follows the
-                                        // finger, and the window moves so that
-                                        // it stays under it.
-                                        val target = timeAt(
-                                            change.position.x,
-                                            currentWidth,
-                                            currentStart,
-                                            currentSpan,
-                                        )
-                                        timelineDrag(anchorMs, target)
-                                    }
+                                val marker = markerNowMs
+                                if (marker != null) {
+                                    // The marker follows the finger; what it
+                                    // was moved to becomes the time the next
+                                    // step starts from.
+                                    val target = timeAt(
+                                        change.position.x,
+                                        currentWidth,
+                                        currentStart,
+                                        currentSpan,
+                                    )
+                                    markerNowMs = markerDrag(marker, target)
+                                } else {
+                                    // The recording is dragged. The anchor
+                                    // stands still on the screen, so the
+                                    // recording moving left means the anchor
+                                    // is reading a later moment: the playhead
+                                    // moves by the opposite of the finger.
+                                    val deltaMs = -EditFollow.pixelsToMs(
+                                        dx,
+                                        currentSpan,
+                                        currentWidth.toFloat(),
+                                    )
+                                    if (deltaMs != 0L) timelineDrag(deltaMs)
                                 }
                                 change.consume()
                             }
                         }
                     }
 
-                    // A marker that was dragged and dropped keeps its place;
-                    // the move is reported on every step, so nothing has to
-                    // happen at the end of the gesture.
-                    if (mode == GestureMode.DRAG && draggedMarker == null) {
-                        // Nothing to undo.
-                    }
-
                     // The editor has to know that the finger is down: while
-                    // it is, the window must not follow the playhead, or the
-                    // two would fight over the same screen.
+                    // it is, the playhead does not drive the window, because
+                    // the finger already does.
                     draggingChanged(mode == GestureMode.DRAG)
                 }
             },
@@ -294,30 +274,27 @@ fun WaveformView(
 
             // --- playhead ---
             //
-            // The line is drawn where the playhead's time actually falls. The
-            // line standing in the middle of the screen is not the drawing's
-            // doing but the window's: while the audio plays, the window is
-            // placed so that the playhead sits exactly in the middle and the
-            // recording slides under it (DESIGN §12.4). While the user drags,
-            // the window belongs to the finger and the line follows it — and
-            // it is put back in the middle when the finger is lifted.
-            playheadMs?.let { ms ->
-                val x = msToX(ms, size.width, startMs, spanMs)
-                if (x in 0f..size.width) {
-                    drawLine(
-                        color = playheadColor,
-                        start = Offset(x, 0f),
-                        end = Offset(x, waveBottom),
-                        strokeWidth = 3.dp.toPx(),
-                    )
-                    // A knob at the top, so the playhead can be seen and
-                    // grabbed even against a busy waveform.
-                    drawCircle(
-                        color = playheadColor,
-                        radius = 9.dp.toPx(),
-                        center = Offset(x, 9.dp.toPx()),
-                    )
-                }
+            // The line is drawn **at the anchor**, not at whatever pixel the
+            // playhead's time happens to fall on. The two agree — the window
+            // is placed so that the anchor is exactly the playhead's moment —
+            // but drawing the anchor is what makes the line unable to move:
+            // even a window placed by a bug, or a rounding of one millisecond,
+            // cannot shift it by a pixel (DESIGN §12.4).
+            playheadMs?.let {
+                val x = size.width * EditFollow.ANCHOR_FRACTION
+                drawLine(
+                    color = playheadColor,
+                    start = Offset(x, 0f),
+                    end = Offset(x, waveBottom),
+                    strokeWidth = 3.dp.toPx(),
+                )
+                // A knob at the top, so the line is readable against a busy
+                // waveform.
+                drawCircle(
+                    color = playheadColor,
+                    radius = 9.dp.toPx(),
+                    center = Offset(x, 9.dp.toPx()),
+                )
             }
 
             // --- time ruler ---
@@ -334,14 +311,6 @@ fun WaveformView(
 }
 
 private enum class GestureMode { UNDECIDED, DRAG, TRANSFORM }
-
-/**
- * How close a touch has to be to the playhead to grab it, in pixels.
- *
- * Wider than a finger's edge, so the playhead can be scrubbed without
- * having to aim at the two pixels it is drawn with.
- */
-private const val PLAYHEAD_HIT_PX = 36f
 
 /**
  * How wide the flag of a marker is, in pixels.

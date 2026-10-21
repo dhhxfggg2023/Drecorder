@@ -50,14 +50,21 @@ class CompositionPreviewPlayer(context: Context) {
     }
 
     /**
-     * Loads [composition] and starts playing it.
+     * Loads [composition] and starts playing it from [fromMs].
+     *
+     * Playback starts where the playhead is, not at the beginning of the file:
+     * pressing play after pointing at a moment means "from here" (DESIGN
+     * §12.4). The seek is issued after `prepare()` so the player has the
+     * timeline to seek on, and before `play()` so the first frame is the right
+     * one.
      *
      * Returns false when the composition cannot be handed to the player at all.
      */
-    fun play(composition: Composition): Boolean {
+    fun play(composition: Composition, fromMs: Long = 0L): Boolean {
         return runCatching {
             player.setComposition(composition)
             player.prepare()
+            if (fromMs > 0L) player.seekTo(fromMs)
             player.play()
         }.isSuccess
     }

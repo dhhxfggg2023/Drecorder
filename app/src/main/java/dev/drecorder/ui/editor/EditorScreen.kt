@@ -49,6 +49,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -352,11 +353,17 @@ fun EditorScreen(
         }
     }
 
+    // The playhead is read once per frame while the preview plays.
+    //
+    // A fixed hundred-millisecond poll is what made the motion look like a
+    // slideshow: the position was read, the waveform jumped, and then nothing
+    // moved for ten frames. Reading it on the frame clock instead keeps the
+    // waveform moving with the audio (DESIGN §12.4).
     LaunchedEffect(previewPlaying) {
         while (previewPlaying) {
+            withFrameMillis { }
             previewPositionMs = previewPlayer.positionMs
             previewDurationMs = previewPlayer.durationMs
-            delay(POLL_INTERVAL_MS)
         }
     }
 
@@ -402,11 +409,12 @@ fun EditorScreen(
 
     // While something plays, the playhead and the window follow it.
     //
-    // `waveformDragging` is part of the key on purpose: the effect reads it
-    // when it runs, and it has to run again when the finger is lifted, or
-    // the window would stay wherever the drag left it.
+    // `waveformDragging` is part of the key on purpose: while a finger is on
+    // the recording it, not the audio, decides where the playhead stands, and
+    // the effect has to run again when the finger is lifted.
     LaunchedEffect(previewPlaying, previewPositionMs, plan, waveformDragging) {
         if (!previewPlaying) return@LaunchedEffect
+        if (waveformDragging) return@LaunchedEffect
         val index = playingIndex ?: return@LaunchedEffect
         val sourceTime = EditTimeline.sourceTimeForOutputMs(plan, index, previewPositionMs)
             ?: return@LaunchedEffect
@@ -415,17 +423,15 @@ fun EditorScreen(
             selectedIndex = index
             selectedMarkerMs = null
         }
-        // The window scrolls so that the playhead stays where it is on the
-        // screen and the waveform moves under it.
+        // The window is derived from the playhead, never from itself: the
+        // anchor is where the playhead stands, so the line is the same pixel
+        // for the whole playback and the recording slides under it.
         val total = sources.getOrNull(index)?.durationMs ?: return@LaunchedEffect
-        val next = EditFollow.follow(
-            current = EditViewport(viewportStartMs, viewportSpanMs),
+        viewportStartMs = EditFollow.pinned(
             playheadMs = sourceTime,
+            spanMs = viewportSpanMs,
             totalMs = total,
-            // A finger on the waveform owns the window while it is down.
-            follow = !waveformDragging,
-        )
-        viewportStartMs = next.startMs
+        ).startMs
     }
 
     // --- the visible window's finer waveform ------------------------------------
@@ -593,10 +599,16 @@ fun EditorScreen(
                     // the phone, it did not lay the page out for it, and it
                     // left the user with a view they had to fix. The
                     // portrait timeline is the one that works (DESIGN §12.4).
-                    IconButton(                        onClick = {
+                    IconButton(
+                        onClick = {
                             val total = current?.durationMs ?: 0L
-                            viewportSpanMs = EditMarkerPlan.fitSpanMs(total)
-                            viewportStartMs = 0L
+                            val span = EditMarkerPlan.fitSpanMs(total)
+                            viewportSpanMs = span
+                            // The window is still derived from the playhead:
+                            // zooming out does not move the line either.
+                            viewportStartMs = EditFollow
+                                .pinned(playheadMs = playheadMs, spanMs = span, totalMs = total)
+                                .startMs
                         },
                     ) {
                         Icon(
@@ -686,8 +698,11 @@ fun EditorScreen(
                                     total,
                                 )
                                 viewportSpanMs = span
-                                viewportStartMs = viewportStartMs.coerceIn(0L, total - span)
-                                playheadMs = playheadMs.coerceIn(0L, total)
+                                val head = playheadMs.coerceIn(0L, total)
+                                playheadMs = head
+                                viewportStartMs = EditFollow
+                                    .pinned(playheadMs = head, spanMs = span, totalMs = total)
+                                    .startMs
                             },
                             label = {
                                 Text(
@@ -733,52 +748,59 @@ fun EditorScreen(
                                 removed = removed,
                                 markers = current.markers,
                                 playheadMs = playheadMs,
-                                onScrub = { ms ->
-                                    playheadMs = ms
-                                    seekToSourceMs(selectedIndex, ms)
-                                },
-                                onTimelineDrag = { grabbedMs, targetMs ->
-                                    // The waveform follows the finger, and
-                                    // the playhead follows the waveform: the
-                                    // moment the user grabbed is the moment
-                                    // that is now playing.
+                                onTimelineDrag = { deltaMs ->
+                                    // The anchor stands still, so moving the
+                                    // recording left means the playhead is
+                                    // reading a later moment. The window is
+                                    // then derived from the playhead — the
+                                    // line cannot move (DESIGN §12.4).
                                     val total = current.durationMs
-                                    val next = EditFollow.dragged(
-                                        current = EditViewport(viewportStartMs, viewportSpanMs),
-                                        grabbedMs = grabbedMs,
-                                        targetMs = targetMs,
-                                        totalMs = total,
-                                    )
-                                    viewportStartMs = next.startMs
-                                    playheadMs = grabbedMs
-                                    seekToSourceMs(selectedIndex, grabbedMs)
+                                    val moved = (playheadMs + deltaMs)
+                                        .coerceIn(0L, total)
+                                    playheadMs = moved
+                                    viewportStartMs = EditFollow
+                                        .pinned(moved, viewportSpanMs, total)
+                                        .startMs
+                                    seekToSourceMs(selectedIndex, moved)
                                 },
                                 onMarkerDrag = { fromMs, toMs ->
+                                    val updated = EditMarkers.move(
+                                        markers = current.markers,
+                                        fromMs = fromMs,
+                                        toMs = toMs,
+                                        totalMs = current.durationMs,
+                                    )
                                     sources = sources.replaceAt(selectedIndex) {
-                                        it.copy(
-                                            markers = EditMarkers.move(
-                                                markers = it.markers,
-                                                fromMs = fromMs,
-                                                toMs = toMs,
-                                                totalMs = it.durationMs,
-                                            ),
-                                        )
+                                        it.copy(markers = updated)
                                     }
+                                    // The gesture carries on from wherever the
+                                    // marker actually ended up: a move that
+                                    // was refused leaves it where it was.
+                                    EditMarkers.hit(
+                                        markers = updated,
+                                        timeMs = toMs.coerceIn(0L, current.durationMs),
+                                        radiusMs = MARKER_GRAB_SLACK_MS,
+                                    ) ?: fromMs
                                 },
-                                onViewportGesture = { zoom, panFraction, focusFraction ->
+                                onViewportGesture = { zoom, panFraction, _ ->
                                     // The maths lives in core-audio so it can be
                                     // unit-tested: a window that leaves the recording
                                     // would show a waveform that matches no audio.
+                                    //
+                                    // A pinch zooms around the playhead, not around
+                                    // the fingers: the line is the anchor and may
+                                    // not move (DESIGN §12.4).
                                     val total = sources.maxOf { it.durationMs }.coerceAtLeast(1L)
-                                    val next = EditViewportMath.apply(
+                                    val next = EditFollow.zoomed(
                                         current = EditViewport(viewportStartMs, viewportSpanMs),
+                                        playheadMs = playheadMs,
                                         totalMs = total,
                                         zoomFactor = zoom,
                                         panFraction = panFraction,
-                                        focusFraction = focusFraction,
                                     )
                                     viewportStartMs = next.startMs
                                     viewportSpanMs = next.spanMs
+                                    playheadMs = EditFollow.anchorMs(next)
                                 },
                                 onDraggingChanged = { dragging ->
                                     waveformDragging = dragging
@@ -856,10 +878,9 @@ fun EditorScreen(
                             totalMs = total,
                         )
                         viewportSpanMs = next
-                        viewportStartMs = viewportStartMs.coerceIn(
-                            0L,
-                            (total - next).coerceAtLeast(0L),
-                        )
+                        viewportStartMs = EditFollow
+                            .pinned(playheadMs = playheadMs, spanMs = next, totalMs = total)
+                            .startMs
                     },
                 ) {
                     Icon(
@@ -876,10 +897,9 @@ fun EditorScreen(
                             totalMs = total,
                         )
                         viewportSpanMs = next
-                        viewportStartMs = viewportStartMs.coerceIn(
-                            0L,
-                            (total - next).coerceAtLeast(0L),
-                        )
+                        viewportStartMs = EditFollow
+                            .pinned(playheadMs = playheadMs, spanMs = next, totalMs = total)
+                            .startMs
                     },
                 ) {
                     Icon(
@@ -917,9 +937,16 @@ fun EditorScreen(
                                 )
                             } else {
                                 val composition = EditComposition.build(plan)
-                                if (previewPlayer.play(composition)) {
+                                // Playback starts where the playhead stands,
+                                // not at the beginning of the merged stream:
+                                // the user pointed at a moment and pressed
+                                // play, which means "from here" (DESIGN §12.4).
+                                val from = EditTimeline
+                                    .nearestOutputMsForSourceTime(plan, selectedIndex, playheadMs)
+                                    ?: 0L
+                                if (previewPlayer.play(composition, from)) {
                                     previewPlaying = true
-                                    previewPositionMs = 0L
+                                    previewPositionMs = from
                                 } else {
                                     notice = context.getString(R.string.editor_preview_failed)
                                 }
@@ -977,16 +1004,14 @@ fun EditorScreen(
                 selectedMarkerMs = selectedMarkerMs,
                 onSelect = { ms ->
                     selectedMarkerMs = ms
-                    // A marker is a place to jump to.
+                    // A marker is a place to jump to: it becomes the moment
+                    // under the anchor.
                     playheadMs = ms
                     seekToSourceMs(selectedIndex, ms)
                     val total = current?.durationMs ?: 0L
-                    val next = EditFollow.centered(
-                        current = EditViewport(viewportStartMs, viewportSpanMs),
-                        targetMs = ms,
-                        totalMs = total,
-                    )
-                    viewportStartMs = next.startMs
+                    viewportStartMs = EditFollow
+                        .pinned(playheadMs = ms, spanMs = viewportSpanMs, totalMs = total)
+                        .startMs
                 },
                 onAddAtPlayhead = {
                     val source = current ?: return@MarkerBar
@@ -1175,6 +1200,15 @@ private const val DETAIL_WIDTH_PX = 1_080
  * the detail view never shows the fine waveform at all.
  */
 private const val FRAME_TOLERANCE_MS = 50L
+
+/**
+ * How far from the requested time a moved marker may end up and still be the
+ * one the gesture carries on with, in ms.
+ *
+ * The move either lands exactly where it was asked to or is refused and stays
+ * put, so the only honest tolerance is "the same millisecond".
+ */
+private const val MARKER_GRAB_SLACK_MS = 1L
 
 /**
  * How often the playhead is read while the preview plays, in ms.
