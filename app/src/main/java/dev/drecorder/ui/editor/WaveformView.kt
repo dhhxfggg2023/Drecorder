@@ -46,6 +46,22 @@ import kotlin.math.roundToLong
 /** A half-open time selection on the original timeline. */
 data class TimeSelection(val startMs: Long, val endMs: Long) {
     val durationMs: Long get() = endMs - startMs
+
+    /**
+     * The selection with both edges inside the window that is on screen.
+     *
+     * A drag that runs off the edge of the window would otherwise select
+     * audio that is not visible — and the user cannot see what they are
+     * about to cut.
+     */
+    fun clampedTo(startMs: Long, spanMs: Long): TimeSelection {
+        val from = startMs
+        val to = startMs + spanMs
+        return TimeSelection(
+            startMs = this.startMs.coerceIn(from, to),
+            endMs = this.endMs.coerceIn(from, to),
+        )
+    }
 }
 
 /**
@@ -187,9 +203,15 @@ fun WaveformView(
                                     )
                                     TimeSelection(moved.startMs, moved.endMs)
                                 } else {
+                                    // A drag that leaves the window does not
+                                    // select audio that is not there: the edge
+                                    // stops at the border of the window.
                                     TimeSelection(
                                         min(anchorMs, currentMs),
                                         max(anchorMs, currentMs),
+                                    ).clampedTo(
+                                        startMs = currentStart,
+                                        spanMs = currentSpan,
                                     )
                                 }
                                 dragged = next

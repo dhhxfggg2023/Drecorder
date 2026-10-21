@@ -407,15 +407,17 @@ fun EditorScreen(
     ) {
         val fine = current?.detailPeaks
         // The fine waveform has to be *this* window's, and it has to be at
-        // least as fine as the window needs. The length is compared with a
-        // tolerance of one bucket: the last bucket of a window is usually
-        // short, and rejecting the waveform over that would leave the user
-        // with the coarse one forever.
-        val bucketMs = 1_000L / (fine?.bucketsPerSecond?.coerceAtLeast(1) ?: 1).toLong()
+        // least as fine as the window needs.
+        //
+        // The length is compared with a tolerance: the decoder stops feeding
+        // at the end of the window, and the last compressed frame reaches a
+        // little past it — or a little short of it, depending on where the
+        // frame boundary falls. Rejecting the waveform over a fraction of a
+        // frame would leave the user with the coarse one forever.
         val coversWindow = fine != null &&
             fine.offsetMs == viewportStartMs &&
             fine.bucketsPerSecond >= detailResolution &&
-            fine.endMs + bucketMs >= viewportStartMs + viewportSpanMs
+            fine.endMs + FRAME_TOLERANCE_MS >= viewportStartMs + viewportSpanMs
         if (coversWindow) fine else current?.peaks
     }
 
@@ -873,3 +875,14 @@ private fun List<EditorSource>.replaceAt(
  * the ladder absorbs the difference.
  */
 private const val DETAIL_WIDTH_PX = 1_080
+
+/**
+ * How much the length of a decoded window may fall short of the window it
+ * was asked for, in ms.
+ *
+ * An AAC frame holds 1024 samples — about 21 ms at 48 kHz — and the decoder
+ * stops feeding at the end of the window, so the waveform it produces ends
+ * within one frame of the window's end. Rejecting it over that would mean
+ * the detail view never shows the fine waveform at all.
+ */
+private const val FRAME_TOLERANCE_MS = 50L
