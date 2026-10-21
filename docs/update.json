@@ -1,15 +1,17 @@
 ﻿{
-    "versionCode":  10,
-    "versionName":  "0.2.7",
+    "versionCode":  11,
+    "versionName":  "0.2.8",
     "minSupportedVersionCode":  1,
-    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.2.7/drecorder-0.2.7.apk",
+    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.2.8/drecorder-0.2.8.apk",
     "mirrors":  [
-
+                    "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.2.8/drecorder-0.2.8.apk",
+                    "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.2.8/drecorder-0.2.8.apk",
+                    "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.2.8/drecorder-0.2.8.apk"
                 ],
-    "sizeBytes":  53018100,
-    "sha256":  "4da5f082a5f8a2e5627b8ab03908d23844215c20e354949421d7d90dd3cb8565",
+    "sizeBytes":  53054184,
+    "sha256":  "eca7dfe7903162af8065ab5770b56bac8d886fe5491275138ce60d07c713b62f",
     "signingCertSha256":  "4f070db7fd59b883e7ab771f88cda4bc80ce3b97e1defcf9e7faeab5a496a348",
-    "publishedAt":  "2026-10-21T12:46:49Z",
-    "releaseNotes":  "编辑器修复：加切点严格落在播放头处（不再被吸附挪走）；切点只在波形上显示，点一下选中即可删除，不再有下方横向列表；合并多条录音时可以调整顺序；编辑页点播放从播放头处开始，波形随音频平滑滚动，缓冲时显示进度指示。",
+    "publishedAt":  "2026-10-21T13:41:20Z",
+    "releaseNotes":  "编辑器：加切点严格落在播放头处；切点只画在波形上，点一下选中即可删除；点两个切点之间的波形就选中那一段，下方出现「删除 / 只保留 / 重复」；切点生成后不能再被拖动；去掉「吸附到静音」。合并顺序改在编辑页调整，并新增「插入音频」按钮，可以直接把别的录音拼进来；编辑页现在可以上下滚动。更新页：「检查更新」不再和「下载 / 安装」同时出现；下载加入镜像加速。",
     "force":  false
 }
