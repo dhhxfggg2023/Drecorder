@@ -124,7 +124,6 @@ fun LibraryScreen(
     val openFailed = stringResource(R.string.library_open_failed)
     val deleted = stringResource(R.string.library_deleted)
     val deleteFailed = stringResource(R.string.library_delete_failed)
-    val mergeNeedTwo = stringResource(R.string.library_merge_need_two)
     val editBusy = stringResource(R.string.library_edit_busy)
 
     suspend fun reload() {
@@ -263,23 +262,13 @@ fun LibraryScreen(
                         ) {
                             Text(stringResource(R.string.library_delete))
                         }
-                        // Merging is a multi-select action, so it lives next to
-                        // delete in the selection bar — no second entry point to
-                        // discover, and it stays disabled until two recordings
-                        // are picked.
-                        Button(
-                            onClick = {
-                                val targets = recordings.filter { it.displayName in selected }
-                                if (targets.size < 2) {
-                                    notify(mergeNeedTwo)
-                                } else {
-                                    onEdit(targets)
-                                }
-                            },
-                            enabled = selected.size >= 2 && !editingDisabled,
-                        ) {
-                            Text(stringResource(R.string.library_merge))
-                        }
+                        // The merge button that used to sit here is gone: the
+                        // library can only say *which* recordings were picked,
+                        // and choosing the order belongs next to the waveform
+                        // where the user can hear the join. A merge now starts
+                        // from one recording and splices the rest in from the
+                        // editor, which is also where the order is set
+                        // (DESIGN §12.2).
                     }
                 }
             }

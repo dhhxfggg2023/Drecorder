@@ -3,6 +3,7 @@ package dev.drecorder.ui.editor
 import android.content.pm.ActivityInfo
 import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,7 +24,6 @@ import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.ZoomOutMap
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -68,7 +68,6 @@ import dev.drecorder.audio.edit.EditPlan
 import dev.drecorder.audio.edit.EditSegment
 import dev.drecorder.audio.edit.EditPlanner
 import dev.drecorder.audio.edit.EditSilence
-import dev.drecorder.audio.edit.EditSnapping
 import dev.drecorder.audio.edit.EditTimeline
 import dev.drecorder.audio.edit.EditViewport
 import dev.drecorder.audio.edit.EditViewportMath
@@ -150,6 +149,16 @@ fun EditorScreen(
     recordings: List<Recording>,
     onBack: () -> Unit,
     onExported: (File) -> Unit = {},
+    /**
+     * Lists the recordings that can be spliced into this session.
+     *
+     * The editor is opened on a selection, but merging is not something the
+     * library can offer before the user knows what the recordings sound like
+     * together: picking the second file belongs next to the waveform, not
+     * behind a back-press. It is a loader rather than a list so the screen
+     * reads the library at the moment the user asks for it.
+     */
+    loadLibrary: suspend () -> List<Recording> = { emptyList() },
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -181,14 +190,21 @@ fun EditorScreen(
     var selectedMarkerMs by remember { mutableStateOf<Long?>(null) }
 
     /**
-     * Whether a cut lands exactly under the playhead or is nudged to a pause.
+     * The stretch of audio the user picked by tapping the waveform, if any.
      *
-     * Off by default: the user asked for the cut to go exactly where the
-     * playhead stands, and a cut that silently moves is the thing they
-     * complained about (m01084). The snap is still available for anyone who
-     * wants a cut on a silence, but it never overrides where the finger put it.
+     * It is what the small buttons below the waveform act on. Nothing picks a
+     * stretch on the user's behalf: the playhead moving through a recording is
+     * not a selection, and treating it as one is what made the old "delete
+     * between the cut points" button offer to delete the tail of the recording
+     * the moment a second cut point appeared (m01839).
      */
-    var snapEnabled by remember { mutableStateOf(false) }
+    var selectedSegment by remember { mutableStateOf<EditSegment?>(null) }
+    /**
+     * The recordings that can be spliced in, once the user has asked to see
+     * them. `null` means the picker is closed.
+     */
+    var insertCandidates by remember { mutableStateOf<List<Recording>?>(null) }
+
     /**
      * Whether a finger is on the waveform right now.
      *
@@ -230,6 +246,76 @@ fun EditorScreen(
     val silentMarker = remember { SilentMarker(context) }
 
     // --- load the waveforms ----------------------------------------------------
+
+    /**
+     * Decodes one recording's waveform into the source at [index].
+     *
+     * It is a function rather than a loop body because the editor can gain a
+     * source after it has opened — the user inserts another recording, or
+     * repeats a stretch — and a source that arrives later needs exactly the
+     * same cache-then-decode treatment as one it opened with.
+     */
+    suspend fun loadWaveform(index: Int, recording: Recording) {
+        val cacheFile = PeaksCache.fileFor(recording.file, context.filesDir)
+        val cached = withContext(Dispatchers.IO) { PeaksCache.read(cacheFile, recording.file) }
+        if (cached != null) {
+            sources = sources.replaceAt(index) { it.copy(peaks = cached.data) }
+            return
+        }
+        sources = sources.replaceAt(index) { it.copy(loading = true, loadProgress = 0) }
+        val decoded = withContext(Dispatchers.IO) {
+            PeakDecoder().decode(
+                recording.file,
+                onProgress = { percent ->
+                    // Progress comes from the decoder thread, so it is
+                    // posted to the main thread; without it the UI would
+                    // read a stale value or touch state off-thread.
+                    scope.launch {
+                        sources = sources.replaceAt(index) {
+                            it.copy(loadProgress = percent)
+                        }
+                    }
+                },
+                // A long recording is decoded in segments, and the
+                // waveform of the part that is already done is handed
+                // over after every segment: the timeline fills in while
+                // the rest is still being decoded.
+                onPartial = { partial ->
+                    scope.launch {
+                        sources = sources.replaceAt(index) { it.copy(peaks = partial) }
+                    }
+                },
+                cancelled = decodeCancelled,
+            )
+        }
+        sources = when (decoded) {
+            is PeakDecoder.Result.Success -> {
+                withContext(Dispatchers.IO) {
+                    runCatching { PeaksCache.write(cacheFile, decoded.data, recording.file) }
+                }
+                sources.replaceAt(index) { it.copy(peaks = decoded.data, loading = false) }
+            }
+            is PeakDecoder.Result.Failure ->
+                sources.replaceAt(index) {
+                    it.copy(
+                        loading = false,
+                        loadProgress = -1,
+                        loadError = when (decoded.reason) {
+                            PeakDecoder.Reason.Cancelled ->
+                                context.getString(R.string.editor_waveform_cancelled)
+
+                            PeakDecoder.Reason.Stalled ->
+                                context.getString(R.string.editor_waveform_stalled)
+
+                            PeakDecoder.Reason.Unknown -> decoded.message
+                        },
+                    )
+                }
+        }
+        // The next source starts with a fresh cancel flag.
+        decodeCancelled.set(false)
+    }
+
     LaunchedEffect(recordings) {
         if (recordings.isEmpty()) return@LaunchedEffect
         val initial = recordings.map { recording ->
@@ -271,65 +357,7 @@ fun EditorScreen(
         }
 
         for (index in initial.indices) {
-            val recording = recordings[index]
-            val cacheFile = PeaksCache.fileFor(recording.file, context.filesDir)
-            val cached = withContext(Dispatchers.IO) { PeaksCache.read(cacheFile, recording.file) }
-            if (cached != null) {
-                sources = sources.replaceAt(index) { it.copy(peaks = cached.data) }
-                continue
-            }
-            sources = sources.replaceAt(index) { it.copy(loading = true, loadProgress = 0) }
-            val decoded = withContext(Dispatchers.IO) {
-                PeakDecoder().decode(
-                    recording.file,
-                    onProgress = { percent ->
-                        // Progress comes from the decoder thread, so it is
-                        // posted to the main thread; without it the UI would
-                        // read a stale value or touch state off-thread.
-                        scope.launch {
-                            sources = sources.replaceAt(index) {
-                                it.copy(loadProgress = percent)
-                            }
-                        }
-                    },
-                    // A long recording is decoded in segments, and the
-                    // waveform of the part that is already done is handed
-                    // over after every segment: the timeline fills in while
-                    // the rest is still being decoded.
-                    onPartial = { partial ->
-                        scope.launch {
-                            sources = sources.replaceAt(index) { it.copy(peaks = partial) }
-                        }
-                    },
-                    cancelled = decodeCancelled,
-                )
-            }
-            sources = when (decoded) {
-                is PeakDecoder.Result.Success -> {
-                    withContext(Dispatchers.IO) {
-                        runCatching { PeaksCache.write(cacheFile, decoded.data, recording.file) }
-                    }
-                    sources.replaceAt(index) { it.copy(peaks = decoded.data, loading = false) }
-                }
-                is PeakDecoder.Result.Failure ->
-                    sources.replaceAt(index) {
-                        it.copy(
-                            loading = false,
-                            loadProgress = -1,
-                            loadError = when (decoded.reason) {
-                                PeakDecoder.Reason.Cancelled ->
-                                    context.getString(R.string.editor_waveform_cancelled)
-
-                                PeakDecoder.Reason.Stalled ->
-                                    context.getString(R.string.editor_waveform_stalled)
-
-                                PeakDecoder.Reason.Unknown -> decoded.message
-                            },
-                        )
-                    }
-            }
-            // The next source starts with a fresh cancel flag.
-            decodeCancelled.set(false)
+            loadWaveform(index, recordings[index])
         }
     }
 
@@ -377,11 +405,18 @@ fun EditorScreen(
     LaunchedEffect(previewPlaying) {
         while (previewPlaying) {
             withFrameMillis { }
+            previewPreparing = previewPlayer.isBuffering
+            // Nothing is followed until the player has actually reached the
+            // moment play was pressed at. Before then its position is still
+            // zero — the composition is being built and the seek has not been
+            // applied — and following it dragged the playhead, and the window
+            // with it, back to the beginning of the recording the instant the
+            // button was pressed: which is what "it does not play from where
+            // the cursor is" looked like (m01839).
+            if (previewPreparing || waveformDragging) continue
             val position = previewPlayer.positionMs
             previewPositionMs = position
             previewDurationMs = previewPlayer.durationMs
-            previewPreparing = previewPlayer.isBuffering
-            if (waveformDragging) continue
             val index = plan.sources.indices.firstOrNull { candidate ->
                 EditTimeline.sourceTimeForOutputMs(plan, candidate, position) != null
             } ?: continue
@@ -586,20 +621,15 @@ fun EditorScreen(
         if (coversWindow) fine else current?.peaks
     }
 
-    // The segment the "delete" button is about: the one that starts at the
-    // marker the user picked, or the one the playhead is in.
-    val currentSegment = remember(current?.markers, selectedMarkerMs, playheadMs, current?.durationMs) {
-        val markers = current?.markers.orEmpty()
-        val total = current?.durationMs ?: 0L
-        val picked = selectedMarkerMs
-        if (picked != null) {
-            val end = EditMarkers.next(markers, picked) ?: total
-            EditSegment(picked, maxOf(picked, end))        } else {
-            EditMarkers.segmentContaining(markers, playheadMs, total)
-        }
-    }
+    // The stretch the small buttons below the waveform act on. It is only ever
+    // what the user tapped: tapping between two cut points picks that stretch.
+    // Nothing is picked on the user's behalf, so a cut point that was just
+    // dropped never turns the whole tail of the recording into a candidate for
+    // deletion — that suggestion was the thing that made two cut points feel
+    // like a trap.
+    val pickedSegment = selectedSegment
     val segmentHasAudio = current?.let {
-        EditMarkers.segmentHasAudio(it.keep, currentSegment)
+        pickedSegment != null && EditMarkers.segmentHasAudio(it.keep, pickedSegment)
     } ?: false
 
     Scaffold(
@@ -639,24 +669,11 @@ fun EditorScreen(
                     // the phone, it did not lay the page out for it, and it
                     // left the user with a view they had to fix. The
                     // portrait timeline is the one that works (DESIGN §12.4).
-                    IconButton(
-                        onClick = {
-                            val total = current?.durationMs ?: 0L
-                            val span = EditMarkerPlan.fitSpanMs(total)
-                            viewportSpanMs = span
-                            // The window is still derived from the playhead:
-                            // zooming out does not move the line either.
-                            viewportStartMs = EditFollow
-                                .pinned(playheadMs = playheadMs, spanMs = span, totalMs = total)
-                                .startMs
-                        },
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.ZoomOutMap,
-                            contentDescription = stringResource(R.string.editor_zoom_fit),
-                        )
-                    }
-
+                    //
+                    // The "fit" button that used to sit here is gone: zoom is
+                    // a pinch on the waveform, and a toolbar button that only
+                    // repeated what the fingers already do was one more thing
+                    // to read on a screen that is mostly waveform.
                     TextButton(
                         enabled = !exporting && plan.keptDurationMs > 0 && formatMismatch == null,
                         onClick = {
@@ -702,10 +719,21 @@ fun EditorScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = 16.dp)
+                // The screen is taller than a phone once the waveform, the
+                // transport, the cut points and the merge order are all on it.
+                // Without this the rows below the fold — the merge order among
+                // them — existed but could not be reached, which is why the
+                // user could not change the order of a merge (m01839).
+                .verticalScroll(rememberScrollState()),
         ) {
             if (sources.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
                     Text(stringResource(R.string.editor_empty))
                 }
                 return@Column
@@ -795,6 +823,33 @@ fun EditorScreen(
                 )
             }
 
+            // --- splice another recording into this one ---
+            //
+            // The library can start a merge, but it cannot offer it *while*
+            // the user is looking at the waveform, and that is when they know
+            // what they want next in the recording. The button is here, next
+            // to the order row it feeds (DESIGN §12.2).
+            TextButton(
+                onClick = {
+                    scope.launch {
+                        val have = sources.map { it.file }.toSet()
+                        insertCandidates = loadLibrary()
+                            .filter { it.file !in have }
+                            .sortedByDescending { it.modifiedAtMillis }
+                    }
+                },
+                enabled = sources.size < MAX_EDIT_SOURCES,
+                modifier = Modifier.heightIn(min = 44.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Add,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(stringResource(R.string.editor_insert_audio))
+            }
+
             // --- the waveform: one track, with the playhead and the markers ---
             Surface(
                 modifier = Modifier.fillMaxWidth(),
@@ -827,6 +882,7 @@ fun EditorScreen(
                                 removed = removed,
                                 markers = current.markers,
                                 playheadMs = playheadMs,
+                                selectedRange = selectedSegment,
                                 onTimelineDrag = { deltaMs ->
                                     // The anchor stands still, so moving the
                                     // recording left means the playhead is
@@ -842,25 +898,6 @@ fun EditorScreen(
                                         .startMs
                                     seekToSourceMs(selectedIndex, moved)
                                 },
-                                onMarkerDrag = { fromMs, toMs ->
-                                    val updated = EditMarkers.move(
-                                        markers = current.markers,
-                                        fromMs = fromMs,
-                                        toMs = toMs,
-                                        totalMs = current.durationMs,
-                                    )
-                                    sources = sources.replaceAt(selectedIndex) {
-                                        it.copy(markers = updated)
-                                    }
-                                    // The gesture carries on from wherever the
-                                    // marker actually ended up: a move that
-                                    // was refused leaves it where it was.
-                                    EditMarkers.hit(
-                                        markers = updated,
-                                        timeMs = toMs.coerceIn(0L, current.durationMs),
-                                        radiusMs = MARKER_GRAB_SLACK_MS,
-                                    ) ?: fromMs
-                                },
                                 onMarkerSelect = { ms ->
                                     // Tapping a cut point picks it, so the bar
                                     // offers to delete it. It does not move the
@@ -868,6 +905,30 @@ fun EditorScreen(
                                     // waveform and the user is aiming at one,
                                     // not at a moment to listen from.
                                     selectedMarkerMs = ms
+                                    selectedSegment = null
+                                },
+                                onSegmentTap = { timeMs ->
+                                    // Tapping the audio picks the stretch
+                                    // between the two cut points around it.
+                                    // Nothing else happens: a tap that also
+                                    // moved the playhead would fight the drag.
+                                    //
+                                    // With no cut points there is no stretch to
+                                    // pick — the whole recording is not a
+                                    // "segment", and offering to delete it one
+                                    // tap from the waveform is the trap the user
+                                    // hit (m01839).
+                                    val total = current.durationMs
+                                    selectedSegment = if (current.markers.isEmpty()) {
+                                        null
+                                    } else {
+                                        EditMarkers.segmentContaining(
+                                            markers = current.markers,
+                                            timeMs = timeMs,
+                                            totalMs = total,
+                                        )
+                                    }
+                                    selectedMarkerMs = null
                                 },
                                 onViewportGesture = { zoom, panFraction, _ ->
                                     // The maths lives in core-audio so it can be
@@ -1034,23 +1095,6 @@ fun EditorScreen(
                 }
 
                 Spacer(modifier = Modifier.weight(1f))
-
-                TextButton(onClick = { snapEnabled = !snapEnabled }) {
-                    Text(
-                        text = stringResource(
-                            if (snapEnabled) {
-                                R.string.editor_snap_on
-                            } else {
-                                R.string.editor_snap_off
-                            },
-                        ),
-                        fontWeight = if (snapEnabled) {
-                            FontWeight.Bold
-                        } else {
-                            FontWeight.Normal
-                        },
-                    )
-                }
             }
 
             Spacer(modifier = Modifier.height(4.dp))
@@ -1073,21 +1117,12 @@ fun EditorScreen(
                 },
                 onAddAtPlayhead = {
                     val source = current ?: return@MarkerBar
-                    val raw = playheadMs.coerceIn(0L, source.durationMs)
-                    // A cut is nudged to the nearest pause: cutting in the
-                    // middle of a word is the most common way to make an edit
-                    // sound wrong (DESIGN §12.4).
-                    val snapped = EditSnapping.snapTime(
-                        peaks = source.peaks,
-                        timeMs = raw,
-                        enabled = snapEnabled,
-                    )
-                    // Two cuts a second apart snap to the *same* pause, and
-                    // inserting the second one would then be a no-op: that is
-                    // why the second cut point used to refuse to appear. The
-                    // snap is a preference, so it yields to the user's finger
-                    // rather than swallowing the cut.
-                    val at = if (snapped in source.markers) raw else snapped
+                    // The cut lands exactly where the line stands. It used to
+                    // be nudged to the quietest nearby moment, which is not
+                    // what "cut here" means: the playhead is the one thing on
+                    // this screen the user aimed at deliberately, and moving it
+                    // afterwards made the cut unplaceable.
+                    val at = playheadMs.coerceIn(0L, source.durationMs)
                     sources = sources.replaceAt(selectedIndex) {
                         it.copy(
                             markers = EditMarkers.insert(
@@ -1097,7 +1132,17 @@ fun EditorScreen(
                             ),
                         )
                     }
+                    // The cut point stays picked, and the stretch it closes —
+                    // from the cut before it to this one — is picked with it, so
+                    // the buttons below act on the piece the user just marked
+                    // off. It is *this* piece and not the tail of the
+                    // recording, which is what two cuts used to offer.
                     selectedMarkerMs = at
+                    selectedSegment = EditMarkers.segmentEndingAt(
+                        markers = source.markers,
+                        atMs = at,
+                        totalMs = source.durationMs,
+                    )
                 },
                 onDelete = { ms ->
                     sources = sources.replaceAt(selectedIndex) {
@@ -1114,20 +1159,63 @@ fun EditorScreen(
 
             Spacer(modifier = Modifier.height(4.dp))
 
-            // --- the cut: take the stretch between two markers out ---
+            // --- the picked stretch: what the small buttons act on ---
             //
-            // Only shown when there are markers. Without them there is no
-            // stretch to take out, and a "delete the whole segment" button that
-            // is one tap away from wiping the recording is a trap, not an
-            // option (the user hit it).
-            if (!current?.markers.isNullOrEmpty()) {
-                SegmentDeleteRow(
-                    segment = currentSegment,
+            // The row only exists while the user has picked a stretch by
+            // tapping it. There is no fallback to "the stretch the playhead is
+            // inside": a playhead is not a selection, and a delete button that
+            // silently retargets itself is one tap away from wiping the
+            // recording — which is exactly what the user hit (m01839).
+            if (pickedSegment != null) {
+                SegmentActionsRow(
+                    segment = pickedSegment,
                     enabled = segmentHasAudio,
+                    repeatEnabled = sources.size < MAX_EDIT_SOURCES,
                     onDelete = {
                         // Deleting a stretch of audio cannot be undone, so the
                         // button asks first (DESIGN §12.4).
-                        pendingSegment = currentSegment
+                        pendingSegment = pickedSegment
+                    },
+                    onKeepOnly = {
+                        sources = sources.replaceAt(selectedIndex) {
+                            val cut = EditPlanner.remove(
+                                keep = it.keep,
+                                fromMs = 0L,
+                                toMs = pickedSegment.startMs,
+                                durationMs = it.durationMs,
+                            )
+                            it.copy(
+                                keep = EditPlanner.remove(
+                                    keep = cut,
+                                    fromMs = pickedSegment.endMs,
+                                    toMs = it.durationMs,
+                                    durationMs = it.durationMs,
+                                ),
+                            )
+                        }
+                        selectedSegment = null
+                        notice = context.getString(R.string.editor_segment_kept)
+                    },
+                    onRepeat = {
+                        // Playing the stretch a second time is not something a
+                        // keep list can express — it says which parts of a file
+                        // are kept, in file order, once each. It is expressed
+                        // the way a merge is: the same recording spliced in
+                        // again, right after itself, carrying only the picked
+                        // stretch (DESIGN §12.2).
+                        val at = selectedIndex
+                        val copy = sources[at].copy(
+                            displayName = context.getString(
+                                R.string.editor_repeat_name,
+                                sources[at].displayName,
+                            ),
+                            keep = listOf(KeepRange(pickedSegment.startMs, pickedSegment.endMs)),
+                            markers = emptyList(),
+                        )
+                        sources = sources.toMutableList().apply { add(at + 1, copy) }
+                        selectedIndex = at + 1
+                        selectedSegment = null
+                        playheadMs = 0L
                     },
                 )
             }
@@ -1225,6 +1313,8 @@ fun EditorScreen(
                             it.copy(keep = result.keep, markers = result.markers)
                         }
                         selectedMarkerMs = null
+                        selectedSegment = null
+                        notice = context.getString(R.string.editor_segment_deleted)
                     },
                 ) {
                     Text(stringResource(R.string.common_confirm))
@@ -1232,6 +1322,91 @@ fun EditorScreen(
             },
             dismissButton = {
                 TextButton(onClick = { pendingSegment = null }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
+    }
+
+    // --- pick a recording to splice in ---
+    insertCandidates?.let { candidates ->
+        AlertDialog(
+            onDismissRequest = { insertCandidates = null },
+            title = { Text(stringResource(R.string.editor_insert_audio)) },
+            text = {
+                if (candidates.isEmpty()) {
+                    Text(stringResource(R.string.editor_insert_none))
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .heightIn(max = 360.dp)
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        candidates.forEach { recording ->
+                            TextButton(
+                                onClick = {
+                                    insertCandidates = null
+                                    if (sources.size >= MAX_EDIT_SOURCES) return@TextButton
+                                    val added = EditorSource(
+                                        file = recording.file,
+                                        durationMs = recording.durationMs,
+                                        displayName = recording.displayName,
+                                        keep = EditPlanner.fullLength(recording.durationMs),
+                                    )
+                                    // The new recording goes last, which is
+                                    // where "and then this one" means, and it
+                                    // becomes the one on screen so the user can
+                                    // trim it before exporting.
+                                    sources = sources + added
+                                    selectedIndex = sources.lastIndex
+                                    selectedMarkerMs = null
+                                    selectedSegment = null
+                                    playheadMs = 0L
+                                    viewportStartMs = 0L
+                                    // A merge has to be one encoding all the
+                                    // way through, so adding a recording that
+                                    // cannot be spliced with the others says so
+                                    // here rather than failing at export.
+                                    scope.launch {
+                                        val specs = withContext(Dispatchers.IO) {
+                                            listOf(recording.displayName to
+                                                AudioFormatProbe.probe(recording.file))
+                                        }
+                                        val base = withContext(Dispatchers.IO) {
+                                            AudioFormatProbe.probe(sources.first().file)
+                                        }
+                                        formatMismatch = if (base == null) {
+                                            null
+                                        } else {
+                                            EditFormats.incompatible(
+                                                base = base,
+                                                others = specs.map { (name, spec) ->
+                                                    name to (spec ?: base.copy(mimeType = "未知"))
+                                                },
+                                            ).takeIf { it.isNotEmpty() }
+                                                ?.joinToString("；") { "${it.first}：${it.second}" }
+                                        }
+                                        loadWaveform(sources.lastIndex, recording)
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(
+                                    text = stringResource(
+                                        R.string.editor_insert_entry,
+                                        recording.displayName,
+                                        formatDuration(recording.durationMs),
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { insertCandidates = null }) {
                     Text(stringResource(R.string.common_cancel))
                 }
             },
@@ -1273,13 +1448,13 @@ private const val DETAIL_WIDTH_PX = 1_080
 private const val FRAME_TOLERANCE_MS = 50L
 
 /**
- * How far from the requested time a moved marker may end up and still be the
- * one the gesture carries on with, in ms.
+ * How many recordings one edit session may splice together.
  *
- * The move either lands exactly where it was asked to or is refused and stays
- * put, so the only honest tolerance is "the same millisecond".
+ * A merge is a handful of files, and repeating a stretch adds one entry per
+ * tap. The cap is here so a stuck gesture cannot grow the list without bound
+ * while the export has to decode every entry.
  */
-private const val MARKER_GRAB_SLACK_MS = 1L
+private const val MAX_EDIT_SOURCES = 32
 
 /**
  * How often the playhead is read while the preview plays, in ms.

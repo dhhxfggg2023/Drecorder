@@ -77,6 +77,15 @@ object EditTimeline {
     ): Long? {
         val source = plan.sources.getOrNull(sourceIndex) ?: return null
         if (source.keep.isEmpty()) return null
+        // A moment that is still in the recording is its own answer. This is
+        // the ordinary case — the playhead usually stands on audio — and it
+        // has to be asked first: the search below only knows how to pick an
+        // edge, and an edge is the wrong answer for a moment in the middle.
+        // Taking the edge regardless is what made "play" start at the end of
+        // the recording instead of where the playhead stood (m01839): for a
+        // 60 s recording with the playhead at 30 s, the two edges were 0 and
+        // 59.999 s, and 59.999 s was the nearer one.
+        outputMsForSourceTime(plan, sourceIndex, sourceTimeMs)?.let { return it }
         var nearestSourceMs: Long? = null
         var nearestDistance = Long.MAX_VALUE
         for (range in source.keep) {

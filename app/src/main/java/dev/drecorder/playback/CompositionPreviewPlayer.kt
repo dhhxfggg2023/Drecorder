@@ -3,6 +3,7 @@ package dev.drecorder.playback
 import android.content.Context
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.CompositionPlayer
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -47,23 +48,45 @@ class CompositionPreviewPlayer(context: Context) {
     private val listener = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
             when (playbackState) {
-                Player.STATE_READY -> {
-                    val pending = pendingSeekMs
-                    if (pending != null) {
-                        pendingSeekMs = null
-                        runCatching { player.seekTo(pending) }
-                    }
-                }
-
+                Player.STATE_READY -> applyPendingSeek()
                 Player.STATE_ENDED -> _finished.tryEmit(Unit)
                 else -> Unit
             }
+        }
+
+        override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+            // The composition's timeline is not built until the player has
+            // prepared it, and a seek before then is clamped into an empty
+            // timeline — so the seek is retried the moment the timeline exists.
+            applyPendingSeek()
         }
 
         override fun onPlayerError(error: PlaybackException) {
             pendingSeekMs = null
             _failed.tryEmit(error)
         }
+    }
+
+    /**
+     * Applies the seek [play] asked for, once the player can honour it.
+     *
+     * A seek issued before the composition has a timeline is clamped into a
+     * zero-length one, i.e. back to the start of the recording — which is how
+     * "play from here" became "play from the beginning" and stayed that way
+     * through a `STATE_READY` that arrived before the duration did. The seek is
+     * therefore held until the player reports a real duration, and dropped only
+     * when it lands.
+     */
+    private fun applyPendingSeek() {
+        val pending = pendingSeekMs ?: return
+        val duration = runCatching { player.duration }.getOrDefault(0L)
+        if (duration <= 0L) return
+        if (pending >= duration) {
+            pendingSeekMs = null
+            return
+        }
+        runCatching { player.seekTo(pending) }
+        pendingSeekMs = null
     }
 
     init {

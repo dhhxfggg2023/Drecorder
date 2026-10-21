@@ -58,6 +58,20 @@ sealed interface UpdateUiState {
     }
     data class ReadyToInstall(val versionName: String) : UpdateUiState
     data class Failed(val message: String) : UpdateUiState
+
+    /**
+     * Whether "check for updates" is a sensible thing to offer right now.
+     *
+     * It is not, once a version has been found: the next step is to download it
+     * or install it, and a second button offering to start over is a choice the
+     * user should not have to make. Nor is it while a download is running, and
+     * nor once the file is on the phone waiting to be installed.
+     */
+    val canCheckAgain: Boolean
+        get() = when (this) {
+            Idle, UpToDate, Checking, is Failed -> true
+            is Available, is Downloading, is ReadyToInstall -> false
+        }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -202,18 +216,25 @@ fun UpdateScreen(
                         UpdateUiState.Idle -> Unit
                     }
 
-                    Button(
-                        onClick = onCheck,
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = state !is UpdateUiState.Checking && state !is UpdateUiState.Downloading,
-                    ) {
-                        Text(
-                            if (state is UpdateUiState.Checking) {
-                                stringResource(R.string.update_checking)
-                            } else {
-                                stringResource(R.string.update_check)
-                            },
-                        )
+                    // "Check for updates" is only offered when there is nothing
+                    // to do with a version that has already been found. Showing
+                    // it next to "Download" asked the user to choose between two
+                    // buttons that both looked like the next step, and next to
+                    // "Install" it offered to throw the downloaded file away
+                    // right before using it (m01839).
+                    if (state.canCheckAgain) {
+                        Button(
+                            onClick = onCheck,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                if (state is UpdateUiState.Checking) {
+                                    stringResource(R.string.update_checking)
+                                } else {
+                                    stringResource(R.string.update_check)
+                                },
+                            )
+                        }
                     }
 
                     // Never leave the user stuck when the download or a mirror fails.

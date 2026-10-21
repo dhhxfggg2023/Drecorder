@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.drecorder.audio.edit.EditFollow
 import dev.drecorder.audio.edit.EditMarkers
+import dev.drecorder.audio.edit.EditSegment
 import dev.drecorder.audio.edit.KeepRange
 import dev.drecorder.audio.edit.PeakData
 import dev.drecorder.audio.edit.WaveformBins
@@ -51,13 +52,20 @@ import kotlin.math.roundToLong
  *
  * Gestures:
  * - one finger drags the recording, which moves the playhead through time;
- * - one finger on a marker drags that marker;
+ * - a tap on a cut point picks that cut point;
+ * - a tap on the audio picks the stretch between the two cut points around it;
  * - two fingers pan and zoom.
  *
  * There is no gesture that drags the playhead itself, because the playhead is
  * not a thing on the screen: it is the anchor. Every gesture changes the
  * moment the anchor stands at, and the window is derived from it, so the red
  * line can never move (DESIGN §12.4).
+ *
+ * There is no gesture that drags a cut point either: a cut point is a decision
+ * the user made about where the audio should be divided, and a finger that
+ * slides one by a few milliseconds while scrolling turns that decision into a
+ * different one by accident (m01839). Cut points are dropped, picked and
+ * removed — never moved.
  *
  * The viewport is owned by the editor screen: two sources edited in one
  * session share one window, so the gesture is reported upwards as a request
@@ -73,8 +81,8 @@ fun WaveformView(
     markers: List<Long>,
     playheadMs: Long?,
     onTimelineDrag: (playheadDeltaMs: Long) -> Unit,
-    onMarkerDrag: (fromMs: Long, toMs: Long) -> Long,
     onMarkerSelect: (ms: Long) -> Unit = {},
+    onSegmentTap: (timeMs: Long) -> Unit = {},
     onViewportGesture: (zoomFactor: Float, panFraction: Float, focusFraction: Float) -> Unit,
     onDraggingChanged: (dragging: Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
@@ -84,6 +92,9 @@ fun WaveformView(
     rulerColor: Color = Color(0x66000000),
     markerColor: Color = Color(0xFFFFA000),
     playheadColor: Color = Color(0xFFE53935),
+    /** The stretch the user has picked, drawn as a highlight under the audio. */
+    selectedRange: EditSegment? = null,
+    selectionColor: Color = Color(0x333D7EFF),
 ) {
     val textMeasurer = rememberTextMeasurer()
     var widthPx by remember { mutableIntStateOf(0) }
@@ -98,8 +109,8 @@ fun WaveformView(
     val currentWidth by rememberUpdatedState(widthPx)
     val currentMarkers by rememberUpdatedState(markers)
     val timelineDrag by rememberUpdatedState(onTimelineDrag)
-    val markerDrag by rememberUpdatedState(onMarkerDrag)
     val markerSelect by rememberUpdatedState(onMarkerSelect)
+    val segmentTap by rememberUpdatedState(onSegmentTap)
     val viewportGesture by rememberUpdatedState(onViewportGesture)
     val draggingChanged by rememberUpdatedState(onDraggingChanged)
 
@@ -124,10 +135,10 @@ fun WaveformView(
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
 
-                    // What the finger grabbed decides what the drag does: a
-                    // marker, or the recording itself. There is no third case:
-                    // the playhead cannot be grabbed, because it is the anchor
-                    // and never moves (DESIGN §12.4).
+                    // What the finger grabbed decides only what a *tap* means:
+                    // a cut point, or the stretch around it. A drag always
+                    // drags the recording, cut point or not — a cut point is
+                    // never moved (m01839).
                     val grabbedMarker = hitMarker(
                         down.position.x,
                         currentWidth.toFloat(),
@@ -135,11 +146,6 @@ fun WaveformView(
                         currentSpan,
                         currentMarkers,
                     )
-                    // A dragged marker's own time changes as it moves, so the
-                    // gesture has to carry its current time: reporting the
-                    // grabbed time every event would look like a brand new
-                    // marker each time.
-                    var markerNowMs: Long? = grabbedMarker
                     var lastX = down.position.x
                     var mode = GestureMode.UNDECIDED
 
@@ -175,31 +181,17 @@ fun WaveformView(
                                 mode = GestureMode.DRAG
                             }
                             if (mode == GestureMode.DRAG) {
-                                val marker = markerNowMs
-                                if (marker != null) {
-                                    // The marker follows the finger; what it
-                                    // was moved to becomes the time the next
-                                    // step starts from.
-                                    val target = timeAt(
-                                        change.position.x,
-                                        currentWidth,
-                                        currentStart,
-                                        currentSpan,
-                                    )
-                                    markerNowMs = markerDrag(marker, target)
-                                } else {
-                                    // The recording is dragged. The anchor
-                                    // stands still on the screen, so the
-                                    // recording moving left means the anchor
-                                    // is reading a later moment: the playhead
-                                    // moves by the opposite of the finger.
-                                    val deltaMs = -EditFollow.pixelsToMs(
-                                        dx,
-                                        currentSpan,
-                                        currentWidth.toFloat(),
-                                    )
-                                    if (deltaMs != 0L) timelineDrag(deltaMs)
-                                }
+                                // The recording is dragged. The anchor stands
+                                // still on the screen, so the recording moving
+                                // left means the anchor is reading a later
+                                // moment: the playhead moves by the opposite
+                                // of the finger.
+                                val deltaMs = -EditFollow.pixelsToMs(
+                                    dx,
+                                    currentSpan,
+                                    currentWidth.toFloat(),
+                                )
+                                if (deltaMs != 0L) timelineDrag(deltaMs)
                                 change.consume()
                             }
                         }
@@ -210,13 +202,26 @@ fun WaveformView(
                     // the finger already does.
                     draggingChanged(mode == GestureMode.DRAG)
 
-                    // A finger that went down on a marker and never moved is a
-                    // tap: it selects the cut point, so the user can delete it
-                    // from the bar. A tap on the recording itself does
-                    // nothing — moving the playhead is a drag, and a tap that
-                    // also jumped would make the two gestures fight.
-                    if (mode == GestureMode.UNDECIDED && grabbedMarker != null) {
-                        markerSelect(grabbedMarker)
+                    // A finger that went down and never moved is a tap. On a
+                    // cut point it picks that cut point; on the audio it picks
+                    // the stretch between the two cut points around it, which
+                    // is what the small buttons below the waveform then act
+                    // on. Moving the playhead is a drag, and a tap that also
+                    // jumped would make the two gestures fight.
+                    if (mode == GestureMode.UNDECIDED) {
+                        val marker = grabbedMarker
+                        if (marker != null) {
+                            markerSelect(marker)
+                        } else {
+                            segmentTap(
+                                timeAt(
+                                    down.position.x,
+                                    currentWidth,
+                                    currentStart,
+                                    currentSpan,
+                                ),
+                            )
+                        }
                     }
                 }
             },
@@ -228,6 +233,35 @@ fun WaveformView(
             val waveBottom = size.height
             val midY = (waveTop + waveBottom) / 2f
             val halfHeight = (waveBottom - waveTop) / 2f - 4.dp.toPx()
+
+            // --- the picked stretch: a band under the audio ---
+            //
+            // It is drawn first, so the waveform stays readable on top of it,
+            // and it is what the small buttons below the waveform act on.
+            selectedRange?.let { range ->
+                val left = msToX(range.startMs, size.width, startMs, spanMs)
+                val right = msToX(range.endMs, size.width, startMs, spanMs)
+                if (right >= 0f && left <= size.width) {
+                    val clippedLeft = max(0f, left)
+                    val clippedRight = min(size.width, right)
+                    drawRect(
+                        color = selectionColor,
+                        topLeft = Offset(clippedLeft, waveTop),
+                        size = Size(clippedRight - clippedLeft, waveBottom - waveTop),
+                    )
+                    // The two edges are what the user aimed at, so they are
+                    // drawn: a selection that is only a tint is hard to read
+                    // against a busy waveform.
+                    for (x in floatArrayOf(clippedLeft, clippedRight)) {
+                        drawLine(
+                            color = selectionColor.copy(alpha = 1f),
+                            start = Offset(x, waveTop),
+                            end = Offset(x, waveBottom),
+                            strokeWidth = 2.dp.toPx(),
+                        )
+                    }
+                }
+            }
 
             // --- removed stretches: greyed out, struck through, left in place ---
             for (range in removed) {

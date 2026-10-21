@@ -88,29 +88,6 @@ object EditMarkers {
         markers.filter { it != atMs }
 
     /**
-     * [markers] with the one at [fromMs] moved to [toMs].
-     *
-     * The result stays sorted and free of duplicates, and the marker stays
-     * inside the recording: a marker that could be dragged past the end of
-     * the file would bound a segment that does not exist.
-     */
-    fun move(markers: List<Long>, fromMs: Long, toMs: Long, totalMs: Long): List<Long> {
-        // A drag reports the marker it grabbed on every pointer event, but the
-        // marker's own time changes as it moves. Once it has left [fromMs] the
-        // gesture is still talking about the marker that was grabbed, and the
-        // only honest answer is "nothing to move": treating the stale time as
-        // a new marker would add one per pointer event, which is how a single
-        // drag used to drop a hundred cut points on the recording.
-        if (!markers.contains(fromMs)) return markers
-        val total = totalMs.coerceAtLeast(0L)
-        val target = toMs.coerceIn(0L, total)
-        if (target == fromMs) return markers
-        val rest = markers.filter { it != fromMs }
-        if (rest.contains(target)) return markers
-        return (rest + target).sorted()
-    }
-
-    /**
      * The segment that [timeMs] falls in.
      *
      * A segment runs from the marker before it to the marker after it. Before
@@ -129,6 +106,23 @@ object EditMarkers {
     /** The first marker strictly after [atMs], or null. */
     fun next(markers: List<Long>, atMs: Long): Long? =
         markers.firstOrNull { it > atMs }
+
+    /**
+     * The stretch that the cut at [atMs] closes: from the marker before it to
+     * [atMs] itself.
+     *
+     * This is the stretch the user has just cut out by dropping a cut point:
+     * they played to a moment they did not want, dropped a marker there, and
+     * what they mean is what lies between the previous marker and this one —
+     * not the stretch that starts here and runs to the end of the recording
+     * (m01839).
+     */
+    fun segmentEndingAt(markers: List<Long>, atMs: Long, totalMs: Long): EditSegment {
+        val total = totalMs.coerceAtLeast(0L)
+        val end = atMs.coerceIn(0L, total)
+        val start = previous(markers, end) ?: 0L
+        return EditSegment(start.coerceAtMost(end), end)
+    }
 
     /** The last marker strictly before [atMs], or null. */
     fun previous(markers: List<Long>, atMs: Long): Long? =

@@ -161,8 +161,6 @@
     <string name="editor_preview">试听</string>
     <string name="editor_preview_failed">试听失败</string>
     <string name="editor_position">%1$s / %2$s</string>
-    <string name="editor_snap_on">吸附到静音：开</string>
-    <string name="editor_snap_off">吸附到静音：关</string>
     <string name="editor_format_mismatch">格式不一致，无法合并：%1$s</string>
     <string name="editor_markers">切点 %1$d</string>
     <string name="editor_markers_empty">还没有切点。点「加切点」在播放头处打一个，播放时波形会自动跟着走。</string>
@@ -177,6 +175,16 @@
     <string name="editor_restore_range_at">恢复 %1$s – %2$s</string>
     <string name="editor_delete_segment">删除 %1$s – %2$s（%3$s）</string>
     <string name="editor_delete_segment_none">删除两个切点之间的片段</string>
+    <string name="editor_segment_picked">已选 %1$s – %2$s（%3$s）</string>
+    <string name="editor_segment_delete">删除</string>
+    <string name="editor_segment_keep">只保留</string>
+    <string name="editor_segment_repeat">重复</string>
+    <string name="editor_segment_kept">已只保留选中的片段</string>
+    <string name="editor_segment_deleted">已删除选中的片段</string>
+    <string name="editor_repeat_name">%1$s（重复）</string>
+    <string name="editor_insert_audio">插入音频</string>
+    <string name="editor_insert_none">没有其他录音可以插入</string>
+    <string name="editor_insert_entry">%1$s（%2$s）</string>
     <string name="editor_delete_confirm_title">删掉这一段？</string>
     <string name="editor_delete_confirm_body">%1$s – %2$s（%3$s）将被删掉，删掉之后不能撤销。</string>
     <string name="editor_zoom_in">放大</string>

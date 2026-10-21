@@ -303,6 +303,10 @@ private fun DrecorderApp() {
         Screen.Editor -> EditorScreen(
             recordings = editingTargets,
             onBack = { screen = Screen.Library },
+            // The editor reads the library itself when the user asks to splice
+            // another recording in, so the list is never stale and the user
+            // does not have to go back to the library to build a merge.
+            loadLibrary = { library.recordings() },
         )
 
         Screen.Settings -> SettingsScreen(
