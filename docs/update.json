@@ -1,15 +1,15 @@
 ﻿{
-    "versionCode":  9,
-    "versionName":  "0.2.6",
+    "versionCode":  10,
+    "versionName":  "0.2.7",
     "minSupportedVersionCode":  1,
-    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.2.6/drecorder-0.2.6.apk",
+    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.2.7/drecorder-0.2.7.apk",
     "mirrors":  [
 
                 ],
-    "sizeBytes":  53015540,
-    "sha256":  "5a8a5e3799d82237ed46678b10475fc90259f233499ec41263a8ffca181b3f86",
+    "sizeBytes":  53018100,
+    "sha256":  "4da5f082a5f8a2e5627b8ab03908d23844215c20e354949421d7d90dd3cb8565",
     "signingCertSha256":  "4f070db7fd59b883e7ab771f88cda4bc80ce3b97e1defcf9e7faeab5a496a348",
-    "publishedAt":  "2026-10-21T12:05:57Z",
-    "releaseNotes":  "编辑器修复：第二个切点加不了；去掉放大/缩小按钮（双指放缩）；没切点时不显示「删除整个片段」；合并入口从顶栏移到选择模式底栏，两条以上录音即可合并。",
+    "publishedAt":  "2026-10-21T12:46:49Z",
+    "releaseNotes":  "编辑器修复：加切点严格落在播放头处（不再被吸附挪走）；切点只在波形上显示，点一下选中即可删除，不再有下方横向列表；合并多条录音时可以调整顺序；编辑页点播放从播放头处开始，波形随音频平滑滚动，缓冲时显示进度指示。",
     "force":  false
 }
