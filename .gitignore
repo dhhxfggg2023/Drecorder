@@ -25,5 +25,8 @@ Thumbs.db
 .tmp-*/
 *.log
 
+# Release artifacts staged in the repo root by the release script
+/drecorder-*.apk
+
 # Session ledger: memory for the agent, not part of the product
 .dsh-code/
