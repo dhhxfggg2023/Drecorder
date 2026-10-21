@@ -33,14 +33,35 @@ class CompositionPreviewPlayer(context: Context) {
     private val _failed = MutableSharedFlow<Throwable>(extraBufferCapacity = 4)
     val failed: SharedFlow<Throwable> = _failed
 
+    /**
+     * Where the seek asked for by [play] has not been applied yet, in ms.
+     *
+     * A seek issued right after `prepare()` is a seek into a timeline the
+     * player has not built yet: `CompositionPlayer` accepts it, then drops it
+     * when the composition is prepared, and playback starts from zero. The
+     * user pressed play *at a moment*, so the seek is held here and applied
+     * once the player reports it is ready (DESIGN §12.4).
+     */
+    private var pendingSeekMs: Long? = null
+
     private val listener = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
-            if (playbackState == Player.STATE_ENDED) {
-                _finished.tryEmit(Unit)
+            when (playbackState) {
+                Player.STATE_READY -> {
+                    val pending = pendingSeekMs
+                    if (pending != null) {
+                        pendingSeekMs = null
+                        runCatching { player.seekTo(pending) }
+                    }
+                }
+
+                Player.STATE_ENDED -> _finished.tryEmit(Unit)
+                else -> Unit
             }
         }
 
         override fun onPlayerError(error: PlaybackException) {
+            pendingSeekMs = null
             _failed.tryEmit(error)
         }
     }
@@ -54,26 +75,29 @@ class CompositionPreviewPlayer(context: Context) {
      *
      * Playback starts where the playhead is, not at the beginning of the file:
      * pressing play after pointing at a moment means "from here" (DESIGN
-     * §12.4). The seek is issued after `prepare()` so the player has the
-     * timeline to seek on, and before `play()` so the first frame is the right
-     * one.
+     * §12.4).
      *
      * Returns false when the composition cannot be handed to the player at all.
      */
     fun play(composition: Composition, fromMs: Long = 0L): Boolean {
         return runCatching {
+            // A previous composition may still be loaded; `setComposition` is
+            // only legal before `prepare()` or after `stop()`, so the player is
+            // stopped first and the new composition replaces the old one.
+            player.stop()
             player.setComposition(composition)
+            pendingSeekMs = fromMs.takeIf { it > 0L }
             player.prepare()
-            if (fromMs > 0L) player.seekTo(fromMs)
-            player.play()
+            // `playWhenReady` rather than `play()`: the flag survives the
+            // buffering that follows, so playback starts as soon as there is
+            // audio instead of being dropped while the composition is built.
+            player.playWhenReady = true
         }.isSuccess
     }
 
     fun stop() {
         runCatching {
-            // CompositionPlayer has no clearComposition(); setComposition is its
-            // only mutator. Stopping is enough — the next play() replaces the
-            // composition anyway.
+            pendingSeekMs = null
             player.stop()
         }
     }
@@ -89,6 +113,17 @@ class CompositionPreviewPlayer(context: Context) {
     /** True while the player is playing. */
     val isPlaying: Boolean
         get() = runCatching { player.isPlaying }.getOrDefault(false)
+
+    /**
+     * True while the player has the composition but cannot play it yet.
+     *
+     * The editor shows this, so a press that produces no sound for a moment
+     * reads as "preparing" rather than as "the button is broken".
+     */
+    val isBuffering: Boolean
+        get() = runCatching {
+            player.playbackState == Player.STATE_BUFFERING
+        }.getOrDefault(false)
 
     fun seekTo(positionMs: Long) {
         runCatching { player.seekTo(positionMs.coerceAtLeast(0L)) }

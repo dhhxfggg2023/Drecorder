@@ -63,6 +63,7 @@ import dev.drecorder.audio.edit.EditFormats
 import dev.drecorder.audio.edit.EditFollow
 import dev.drecorder.audio.edit.EditMarkerPlan
 import dev.drecorder.audio.edit.EditMarkers
+import dev.drecorder.audio.edit.EditOrder
 import dev.drecorder.audio.edit.EditPlan
 import dev.drecorder.audio.edit.EditSegment
 import dev.drecorder.audio.edit.EditPlanner
@@ -156,7 +157,6 @@ fun EditorScreen(
 
     var sources by remember { mutableStateOf<List<EditorSource>>(emptyList()) }
     var selectedIndex by remember { mutableStateOf(0) }
-    var snapEnabled by remember { mutableStateOf(true) }
     var notice by remember { mutableStateOf<String?>(null) }
     // Non-null when the sources cannot be spliced without re-encoding. The merge is
     // then refused outright instead of quietly transcoding (DESIGN §12.1).
@@ -166,6 +166,8 @@ fun EditorScreen(
     var previewPlaying by remember { mutableStateOf(false) }
     var previewPositionMs by remember { mutableStateOf(0L) }
     var previewDurationMs by remember { mutableStateOf(0L) }
+    /** True while the player is preparing the composition and cannot sound yet. */
+    var previewPreparing by remember { mutableStateOf(false) }
 
     /**
      * The playhead, in the **source** time of the recording on screen.
@@ -177,6 +179,16 @@ fun EditorScreen(
     var playheadMs by remember { mutableStateOf(0L) }
     /** The marker the user picked, if any. */
     var selectedMarkerMs by remember { mutableStateOf<Long?>(null) }
+
+    /**
+     * Whether a cut lands exactly under the playhead or is nudged to a pause.
+     *
+     * Off by default: the user asked for the cut to go exactly where the
+     * playhead stands, and a cut that silently moves is the thing they
+     * complained about (m01084). The snap is still available for anyone who
+     * wants a cut on a silence, but it never overrides where the finger put it.
+     */
+    var snapEnabled by remember { mutableStateOf(false) }
     /**
      * Whether a finger is on the waveform right now.
      *
@@ -356,11 +368,38 @@ fun EditorScreen(
     // slideshow: the position was read, the waveform jumped, and then nothing
     // moved for ten frames. Reading it on the frame clock instead keeps the
     // waveform moving with the audio (DESIGN §12.4).
+    //
+    // The readout and the playhead move here rather than in an effect keyed on
+    // `previewPositionMs`: a key that changes every frame restarts the effect
+    // every frame, and anything downstream of it (the window, and the window's
+    // decode) then restarts every frame too. That storm of window decodes is
+    // what starved the codec and stopped the audio after a couple of seconds.
     LaunchedEffect(previewPlaying) {
         while (previewPlaying) {
             withFrameMillis { }
-            previewPositionMs = previewPlayer.positionMs
+            val position = previewPlayer.positionMs
+            previewPositionMs = position
             previewDurationMs = previewPlayer.durationMs
+            previewPreparing = previewPlayer.isBuffering
+            if (waveformDragging) continue
+            val index = plan.sources.indices.firstOrNull { candidate ->
+                EditTimeline.sourceTimeForOutputMs(plan, candidate, position) != null
+            } ?: continue
+            val sourceTime = EditTimeline.sourceTimeForOutputMs(plan, index, position) ?: continue
+            playheadMs = sourceTime
+            if (index != selectedIndex) {
+                selectedIndex = index
+                selectedMarkerMs = null
+            }
+            val total = sources.getOrNull(index)?.durationMs ?: continue
+            // The window is derived from the playhead, never from itself: the
+            // anchor is where the playhead stands, so the line is the same
+            // pixel for the whole playback and the recording slides under it.
+            viewportStartMs = EditFollow.pinned(
+                playheadMs = sourceTime,
+                spanMs = viewportSpanMs,
+                totalMs = total,
+            ).startMs
         }
     }
 
@@ -404,32 +443,10 @@ fun EditorScreen(
         }
     }
 
-    // While something plays, the playhead and the window follow it.
-    //
-    // `waveformDragging` is part of the key on purpose: while a finger is on
-    // the recording it, not the audio, decides where the playhead stands, and
-    // the effect has to run again when the finger is lifted.
-    LaunchedEffect(previewPlaying, previewPositionMs, plan, waveformDragging) {
-        if (!previewPlaying) return@LaunchedEffect
-        if (waveformDragging) return@LaunchedEffect
-        val index = playingIndex ?: return@LaunchedEffect
-        val sourceTime = EditTimeline.sourceTimeForOutputMs(plan, index, previewPositionMs)
-            ?: return@LaunchedEffect
-        playheadMs = sourceTime
-        if (index != selectedIndex) {
-            selectedIndex = index
-            selectedMarkerMs = null
-        }
-        // The window is derived from the playhead, never from itself: the
-        // anchor is where the playhead stands, so the line is the same pixel
-        // for the whole playback and the recording slides under it.
-        val total = sources.getOrNull(index)?.durationMs ?: return@LaunchedEffect
-        viewportStartMs = EditFollow.pinned(
-            playheadMs = sourceTime,
-            spanMs = viewportSpanMs,
-            totalMs = total,
-        ).startMs
-    }
+    // While something plays, the playhead and the window follow it — but that
+    // happens in the frame loop above, not here: an effect keyed on
+    // `previewPositionMs` restarts every frame, and the window decode
+    // downstream of it then restarts every frame too.
 
     // --- the visible window's finer waveform ------------------------------------
     //
@@ -459,7 +476,31 @@ fun EditorScreen(
         )
     }
 
-    LaunchedEffect(current?.file, viewportStartMs, viewportSpanMs, detailResolution) {
+    // The window that is *decoded* is coarser than the window that is shown.
+    //
+    // While the preview plays, the visible window moves every frame — that is
+    // what makes the waveform scroll. Keying the decode on it would therefore
+    // restart the decode sixty times a second, and each restart creates a
+    // MediaCodec: the codec pool is exhausted, the audio starves, and playback
+    // stops after a second or two (the user's report, m01084, and the log that
+    // goes with it).
+    //
+    // So the decode window is snapped down to a quarter of the span and is
+    // decoded a little wider than the visible one. It then has to change only
+    // once every quarter span of scrolling, while still always covering what
+    // is on screen.
+    val decodeStepMs = remember(viewportSpanMs) {
+        (viewportSpanMs / 4).coerceAtLeast(1L)
+    }
+    val decodeStartMs = remember(viewportStartMs, decodeStepMs) {
+        val step = decodeStepMs
+        Math.floorDiv(viewportStartMs, step) * step
+    }
+    val decodeSpanMs = remember(viewportSpanMs, decodeStepMs) {
+        viewportSpanMs + decodeStepMs
+    }
+
+    LaunchedEffect(current?.file, decodeStartMs, decodeSpanMs, detailResolution) {
         val source = current ?: return@LaunchedEffect
         // Starting a new window stops the decode of the previous one: a
         // pinch gesture moves the window many times a second, and every one
@@ -476,11 +517,11 @@ fun EditorScreen(
         // middle of the screen — and the time before the recording has no
         // audio in it (DESIGN §12.4).
         val range = EditWindow.fileRange(
-            viewport = EditViewport(viewportStartMs, viewportSpanMs),
+            viewport = EditViewport(decodeStartMs, decodeSpanMs),
             totalMs = source.durationMs,
         ) ?: return@LaunchedEffect
-        val windowStart = viewportStartMs
-        val windowSpan = viewportSpanMs
+        val windowStart = decodeStartMs
+        val windowSpan = decodeSpanMs
         val start = range.first
         val end = range.last + 1
         val result = withContext(Dispatchers.IO) {
@@ -492,9 +533,11 @@ fun EditorScreen(
                 cancelled = cancelled,
             )
         }
-        // The window may have moved while the decode ran; a result for the old
-        // window is stale and is dropped rather than shown.
-        if (windowStart != viewportStartMs || windowSpan != viewportSpanMs) {
+        // The decode window may have changed while the decode ran; a result
+        // for an old window is stale and is dropped rather than shown. It is
+        // compared with the decode window, not with the visible one: the two
+        // deliberately differ (see decodeStepMs).
+        if (windowStart != decodeStartMs || windowSpan != decodeSpanMs) {
             return@LaunchedEffect
         }
         if (result is PeakDecoder.Result.Success) {
@@ -713,6 +756,45 @@ fun EditorScreen(
                 }
             }
 
+            // --- the order of the merge ---
+            //
+            // A merge is not a set: "A then B" and "B then A" are two different
+            // recordings, and the library can only say *which* ones were
+            // picked. The order is therefore shown here and is changeable,
+            // before the export (DESIGN §12.2). Without this row the order was
+            // whatever the library happened to hand over — the user asked for a
+            // merge and could not say in which order.
+            if (sources.size > 1) {
+                MergeOrderRow(
+                    names = sources.map { it.displayName },
+                    selectedIndex = selectedIndex,
+                    onMove = { from, delta ->
+                        // The recording the user is looking at stays the one on
+                        // screen: reordering the list must not silently switch
+                        // the waveform under the playhead.
+                        selectedIndex = EditOrder.destinationOf(sources, from, delta)
+                        sources = EditOrder.move(sources, from, delta)
+                    },
+                    onSelect = { index ->
+                        val target = sources.getOrNull(index) ?: return@MergeOrderRow
+                        selectedIndex = index
+                        selectedMarkerMs = null
+                        val total = target.durationMs.coerceAtLeast(1L)
+                        val span = viewportSpanMs.coerceIn(
+                            EditViewportMath.MIN_SPAN_MS.coerceAtMost(total),
+                            total,
+                        )
+                        viewportSpanMs = span
+                        val head = playheadMs.coerceIn(0L, total)
+                        playheadMs = head
+                        viewportStartMs = EditFollow
+                            .pinned(playheadMs = head, spanMs = span, totalMs = total)
+                            .startMs
+                    },
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+            }
+
             // --- the waveform: one track, with the playhead and the markers ---
             Surface(
                 modifier = Modifier.fillMaxWidth(),
@@ -778,6 +860,14 @@ fun EditorScreen(
                                         timeMs = toMs.coerceIn(0L, current.durationMs),
                                         radiusMs = MARKER_GRAB_SLACK_MS,
                                     ) ?: fromMs
+                                },
+                                onMarkerSelect = { ms ->
+                                    // Tapping a cut point picks it, so the bar
+                                    // offers to delete it. It does not move the
+                                    // playhead: the cut points are drawn on the
+                                    // waveform and the user is aiming at one,
+                                    // not at a moment to listen from.
+                                    selectedMarkerMs = ms
                                 },
                                 onViewportGesture = { zoom, panFraction, _ ->
                                     // The maths lives in core-audio so it can be
@@ -931,6 +1021,17 @@ fun EditorScreen(
                     ),
                     style = MaterialTheme.typography.bodyLarge,
                 )
+
+                // The player builds the composition before it can sound: a
+                // second or two with no audio is normal, and saying so is what
+                // keeps it from reading as "the button did nothing" — which is
+                // exactly what the user reported (m01084).
+                if (previewPreparing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                    )
+                }
 
                 Spacer(modifier = Modifier.weight(1f))
 

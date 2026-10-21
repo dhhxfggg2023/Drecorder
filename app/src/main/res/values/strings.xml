@@ -166,9 +166,15 @@
     <string name="editor_format_mismatch">格式不一致，无法合并：%1$s</string>
     <string name="editor_markers">切点 %1$d</string>
     <string name="editor_markers_empty">还没有切点。点「加切点」在播放头处打一个，播放时波形会自动跟着走。</string>
+    <string name="editor_markers_hint">点波形上的切点可以选中，选中后可以删除。</string>
+    <string name="editor_marker_picked">已选中 %1$s，点右侧按钮可以删除。</string>
     <string name="editor_marker_add">加切点</string>
     <string name="editor_marker_deleted">已删除切点</string>
     <string name="editor_marker_delete">删除切点 %1$s</string>
+    <string name="editor_merge_order">合并顺序（从上往下依次播放）</string>
+    <string name="editor_move_earlier">上移</string>
+    <string name="editor_move_later">下移</string>
+    <string name="editor_restore_range_at">恢复 %1$s – %2$s</string>
     <string name="editor_delete_segment">删除 %1$s – %2$s（%3$s）</string>
     <string name="editor_delete_segment_none">删除两个切点之间的片段</string>
     <string name="editor_delete_confirm_title">删掉这一段？</string>

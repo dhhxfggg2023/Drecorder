@@ -74,6 +74,7 @@ fun WaveformView(
     playheadMs: Long?,
     onTimelineDrag: (playheadDeltaMs: Long) -> Unit,
     onMarkerDrag: (fromMs: Long, toMs: Long) -> Long,
+    onMarkerSelect: (ms: Long) -> Unit = {},
     onViewportGesture: (zoomFactor: Float, panFraction: Float, focusFraction: Float) -> Unit,
     onDraggingChanged: (dragging: Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
@@ -98,6 +99,7 @@ fun WaveformView(
     val currentMarkers by rememberUpdatedState(markers)
     val timelineDrag by rememberUpdatedState(onTimelineDrag)
     val markerDrag by rememberUpdatedState(onMarkerDrag)
+    val markerSelect by rememberUpdatedState(onMarkerSelect)
     val viewportGesture by rememberUpdatedState(onViewportGesture)
     val draggingChanged by rememberUpdatedState(onDraggingChanged)
 
@@ -207,6 +209,15 @@ fun WaveformView(
                     // it is, the playhead does not drive the window, because
                     // the finger already does.
                     draggingChanged(mode == GestureMode.DRAG)
+
+                    // A finger that went down on a marker and never moved is a
+                    // tap: it selects the cut point, so the user can delete it
+                    // from the bar. A tap on the recording itself does
+                    // nothing — moving the playhead is a drag, and a tap that
+                    // also jumped would make the two gestures fight.
+                    if (mode == GestureMode.UNDECIDED && grabbedMarker != null) {
+                        markerSelect(grabbedMarker)
+                    }
                 }
             },
     ) {
