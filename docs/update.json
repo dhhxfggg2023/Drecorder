@@ -1,15 +1,15 @@
-{
+﻿{
+    "versionCode":  5,
+    "versionName":  "0.2.2",
     "minSupportedVersionCode":  1,
+    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.2.2/drecorder-0.2.2.apk",
     "mirrors":  [
 
                 ],
-    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.2.1/drecorder-0.2.1.apk",
-    "releaseNotes":  "修复编辑器波形一直转圈：新录音秒开波形，老录音生成波形时显示百分比、可取消。",
-    "publishedAt":  "2026-10-20T13:47:40Z",
+    "sizeBytes":  53011268,
+    "sha256":  "f40f7dd620623347bd2a811a4a1c7cfaa9ada5b9acd09004856ceeb87a3c8963",
     "signingCertSha256":  "4f070db7fd59b883e7ab771f88cda4bc80ce3b97e1defcf9e7faeab5a496a348",
-    "sha256":  "124cb94172b60b1fc01d0d73adffba8567ab1322997689fddfb533a57a560c73",
-    "force":  false,
-    "versionName":  "0.2.1",
-    "versionCode":  4,
-    "sizeBytes":  52926884
+    "publishedAt":  "2026-10-21T03:43:01Z",
+    "releaseNotes":  "波形渐进加载：顶部概览条 + 30 秒详情窗口，长录音按 2 分钟分段解码；选区可用波形手柄或数值面板精确调整；修复更新下载不显示进度、首次授权安装后卡死。",
+    "force":  false
 }
