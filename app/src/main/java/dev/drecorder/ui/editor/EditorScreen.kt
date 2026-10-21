@@ -64,6 +64,7 @@ import dev.drecorder.audio.edit.EditViewport
 import dev.drecorder.audio.edit.EditViewportMath
 import dev.drecorder.audio.edit.KeepRange
 import dev.drecorder.audio.edit.PeakData
+import dev.drecorder.audio.edit.PeakDecodeGate
 import dev.drecorder.audio.edit.PeakDecoder
 import dev.drecorder.audio.edit.PeakLod
 import dev.drecorder.audio.edit.PeaksCache
@@ -154,7 +155,12 @@ fun EditorScreen(
     // The window decodes have their own flag: the user who cancels the detail
     // waveform must not also cancel the waveform of the whole recording, and
     // the other way round.
-    val windowDecodeCancelled = remember { AtomicBoolean(false) }
+    //
+    // The gate is what makes a fast gesture affordable: every window that
+    // comes along stops the decode that is still running for the previous
+    // one. Without it, a pinch would leave a dozen decodes behind, each of
+    // them busy with a window nobody looks at any more.
+    val windowDecodeGate = remember { PeakDecodeGate() }
 
     // The viewport is shared by all sources so that a zoom level means the same
     // thing wherever the user looks.
@@ -335,9 +341,10 @@ fun EditorScreen(
 
     LaunchedEffect(current?.file, viewportStartMs, viewportSpanMs, detailResolution) {
         val source = current ?: return@LaunchedEffect
-        // A window that was cancelled stays cancelled until the window moves
-        // again, so the user is not spammed with a decode they just refused.
-        windowDecodeCancelled.set(false)
+        // Starting a new window stops the decode of the previous one: a
+        // pinch gesture moves the window many times a second, and every one
+        // of those windows would otherwise be decoded.
+        val cancelled = windowDecodeGate.start()
         if (!needsDetail) {
             if (source.detailPeaks != null) {
                 sources = sources.replaceAt(selectedIndex) { it.copy(detailPeaks = null) }
@@ -352,7 +359,7 @@ fun EditorScreen(
                 startMs = start,
                 endMs = end,
                 bucketsPerSecond = detailResolution,
-                cancelled = windowDecodeCancelled,
+                cancelled = cancelled,
             )
         }
         // The window may have moved while the decode ran; a result for the old
@@ -362,6 +369,14 @@ fun EditorScreen(
         }
         if (result is PeakDecoder.Result.Success) {
             sources = sources.replaceAt(selectedIndex) { it.copy(detailPeaks = result.data) }
+        }
+    }
+
+    // A decode that is still running when the editor is closed is a decode
+    // nobody waits for.
+    DisposableEffect(Unit) {
+        onDispose {
+            windowDecodeGate.stop()
         }
     }
 
