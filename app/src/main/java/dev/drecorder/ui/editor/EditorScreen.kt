@@ -182,8 +182,10 @@ fun EditorScreen(
         // recording: thirty seconds is what a waveform can actually show, and
         // the overview strip above it carries the map of the rest
         // (DESIGN §12.4).
-        val longest = initial.maxOf { it.durationMs }.coerceAtLeast(1L)
-        val opening = EditOverview.initialViewport(longest)
+        //
+        // The window is fitted to the source that is on screen — the first
+        // one, which is the one that is selected when the editor opens.
+        val opening = EditOverview.initialViewport(initial.first().durationMs)
         viewportSpanMs = opening.spanMs
         viewportStartMs = opening.startMs
 

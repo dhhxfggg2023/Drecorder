@@ -86,6 +86,22 @@ class PeakDecodeLoop(
             //    only place where waiting is pointless.
             var fed = 0
             while (!sawInputEnd) {
+                // The samples that are before the window are skipped *before*
+                // a buffer is taken from the codec: a dequeued input buffer
+                // that is never queued is not returned to the pool, and the
+                // decoder would run out of them.
+                if (window != null) {
+                    var previousTime = source.sampleTimeUs
+                    while (previousTime >= 0L && previousTime < window.startUs) {
+                        source.advance()
+                        stats.skippedSamples++
+                        val now = source.sampleTimeUs
+                        // A source that does not move would spin here.
+                        if (now <= previousTime) break
+                        previousTime = now
+                    }
+                }
+
                 val index = driver.dequeueInputBuffer(0L)
                 if (index < 0) break
                 val buffer = driver.inputBuffer(index)
@@ -104,12 +120,14 @@ class PeakDecodeLoop(
                             sawInputEnd = true
                         }
 
-                        // Before the window: the seek landed a little early,
-                        // so this sample belongs to the part that is off
-                        // screen. It is dropped, not decoded.
+                        // Before the window: the skip above should have
+                        // dealt with this already. It is a safety net, and it
+                        // ends the stream rather than handing the decoder an
+                        // empty frame — a zero-length frame is not something
+                        // a decoder can make sense of.
                         active != null && timeUs < active.startUs -> {
-                            source.advance()
-                            stats.skippedSamples++
+                            driver.queueEndOfStream(index)
+                            sawInputEnd = true
                         }
 
                         else -> {
