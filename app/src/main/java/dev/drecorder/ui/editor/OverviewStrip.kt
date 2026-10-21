@@ -19,6 +19,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.drecorder.audio.edit.EditOverview
@@ -48,6 +50,8 @@ fun OverviewStrip(
     viewportSpanMs: Long,
     onViewportMove: (startMs: Long, spanMs: Long) -> Unit,
     modifier: Modifier = Modifier,
+    /** What a screen reader should say about the strip. */
+    overviewLabel: String = "",
     height: Dp = 48.dp,
     waveColor: Color = Color(0xFF3D7EFF),
     viewportColor: Color = Color(0xFF1B5FD9),
@@ -74,6 +78,11 @@ fun OverviewStrip(
             .fillMaxWidth()
             .height(height)
             .onSizeChanged { widthPx = it.width }
+            .semantics {
+                // The strip is a picture; a screen reader needs to be told
+                // what it is, and which part of the recording it shows.
+                contentDescription = overviewLabel
+            }
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)

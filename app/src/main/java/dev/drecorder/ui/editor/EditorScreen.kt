@@ -569,6 +569,7 @@ fun EditorScreen(
                     viewportStartMs = start
                     viewportSpanMs = span
                 },
+                overviewLabel = stringResource(R.string.editor_overview),
                 modifier = Modifier.fillMaxWidth(),
             )
 
