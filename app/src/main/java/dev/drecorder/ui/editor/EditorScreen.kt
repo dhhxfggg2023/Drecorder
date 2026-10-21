@@ -53,7 +53,6 @@ import dev.drecorder.audio.edit.EditComposition
 import dev.drecorder.audio.edit.EditExportResult
 import dev.drecorder.audio.edit.EditExporter
 import dev.drecorder.audio.edit.EditFormats
-import dev.drecorder.audio.edit.EditHandle
 import dev.drecorder.audio.edit.EditOverview
 import dev.drecorder.audio.edit.EditPlan
 import dev.drecorder.audio.edit.EditPlanner
