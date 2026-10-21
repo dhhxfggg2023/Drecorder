@@ -1,15 +1,15 @@
 ﻿{
-    "versionCode":  8,
-    "versionName":  "0.2.5",
+    "versionCode":  9,
+    "versionName":  "0.2.6",
     "minSupportedVersionCode":  1,
-    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.2.5/drecorder-0.2.5.apk",
+    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.2.6/drecorder-0.2.6.apk",
     "mirrors":  [
 
                 ],
     "sizeBytes":  53015540,
-    "sha256":  "db4e7eb0f6140296a1ad68a029f59b7d23e8d6b8a4bfabb8cf48450bb6558f04",
+    "sha256":  "5a8a5e3799d82237ed46678b10475fc90259f233499ec41263a8ffca181b3f86",
     "signingCertSha256":  "4f070db7fd59b883e7ab771f88cda4bc80ce3b97e1defcf9e7faeab5a496a348",
-    "publishedAt":  "2026-10-21T11:36:14Z",
-    "releaseNotes":  "编辑器修复：播放头固定在屏幕正中，波形在它下面滚动；修复打点手势——拖一下不再打出一百多个切点；点播放从红色光标处开始，且播放动画平滑不卡顿。",
+    "publishedAt":  "2026-10-21T12:05:57Z",
+    "releaseNotes":  "编辑器修复：第二个切点加不了；去掉放大/缩小按钮（双指放缩）；没切点时不显示「删除整个片段」；合并入口从顶栏移到选择模式底栏，两条以上录音即可合并。",
     "force":  false
 }
