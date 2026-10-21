@@ -36,8 +36,10 @@ data class EditViewport(
  *
  *  - `spanMs` is between [MIN_SPAN_MS] and the length of the recording, so the
  *    window can never be empty or wider than the file;
- *  - `startMs` is between `0` and `length - spanMs`, so the window always shows
- *    a part of the recording that exists;
+ *  - `startMs` may be **negative**: the playhead stands in the middle of the
+ *    screen, and the window therefore reaches into the time before the
+ *    recording started (DESIGN §12.4). The window is never pushed so far
+ *    that it no longer overlaps the recording;
  *  - the point the gesture focused on stays at the same place on screen.
  */
 object EditViewportMath {
@@ -83,9 +85,11 @@ object EditViewportMath {
         var newStart = focusTime - (newSpan * focus).toLong()
         newStart -= (panFraction * newSpan).toLong()
 
+        // The window may reach before the recording, but it must always
+        // overlap it: a window that shows nothing at all is not a window.
         val maxStart = (total - newSpan).coerceAtLeast(0L)
         return EditViewport(
-            startMs = newStart.coerceIn(0L, maxStart),
+            startMs = newStart.coerceIn(-newSpan, maxStart),
             spanMs = newSpan,
         )
     }

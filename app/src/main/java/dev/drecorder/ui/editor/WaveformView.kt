@@ -171,8 +171,7 @@ fun WaveformView(
                             val change = pressed.first()
                             if (mode == GestureMode.UNDECIDED &&
                                 abs(change.position.x - down.position.x) > viewConfiguration.touchSlop
-                            ) {
-                                mode = GestureMode.DRAG
+                            ) {                                mode = GestureMode.DRAG
                             }
                             if (mode == GestureMode.DRAG) {
                                 when {
@@ -294,6 +293,14 @@ fun WaveformView(
             }
 
             // --- playhead ---
+            //
+            // The line is drawn where the playhead's time actually falls. The
+            // line standing in the middle of the screen is not the drawing's
+            // doing but the window's: while the audio plays, the window is
+            // placed so that the playhead sits exactly in the middle and the
+            // recording slides under it (DESIGN §12.4). While the user drags,
+            // the window belongs to the finger and the line follows it — and
+            // it is put back in the middle when the finger is lifted.
             playheadMs?.let { ms ->
                 val x = msToX(ms, size.width, startMs, spanMs)
                 if (x in 0f..size.width) {

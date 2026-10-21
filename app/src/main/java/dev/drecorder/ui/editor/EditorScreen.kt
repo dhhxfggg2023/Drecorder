@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material.icons.filled.ZoomOutMap
 import androidx.compose.material.icons.filled.ScreenRotation
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -72,6 +73,7 @@ import dev.drecorder.audio.edit.EditSnapping
 import dev.drecorder.audio.edit.EditTimeline
 import dev.drecorder.audio.edit.EditViewport
 import dev.drecorder.audio.edit.EditViewportMath
+import dev.drecorder.audio.edit.EditWindow
 import dev.drecorder.audio.edit.KeepRange
 import dev.drecorder.audio.edit.PeakData
 import dev.drecorder.audio.edit.PeakDecodeGate
@@ -185,8 +187,13 @@ fun EditorScreen(
      * would jump back under the finger every 100 ms.
      */
     var waveformDragging by remember { mutableStateOf(false) }
-    /** Whether the editor is in landscape; the button in the bar turns it. */
-    var landscape by remember { mutableStateOf(false) }
+    /**
+     * The stretch the user is about to delete, waiting for a confirmation.
+     *
+     * Deleting a stretch of audio cannot be undone, so the button asks
+     * first: the segment is held here until the user says yes (DESIGN §12.4).
+     */
+    var pendingSegment by remember { mutableStateOf<EditSegment?>(null) }
 
     // The decoder checks this between chunks, so a long waveform generation can
     // be stopped. It is reset for every source that is decoded.
@@ -366,12 +373,15 @@ fun EditorScreen(
         }
     }
 
+    // The editor is a portrait screen. The landscape timeline was tried and
+    // dropped: it turned the phone without laying the page out for it, and
+    // the user was left with a view that did not work (DESIGN §12.4).
     DisposableEffect(Unit) {
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         onDispose {
             previewPlayer.release()
-            // The editor turns the screen itself; it must not leave the app
-            // sideways when the user walks away from it.
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            // The screen belongs to the app again once the editor is closed.
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
     }
 
@@ -458,8 +468,18 @@ fun EditorScreen(
             }
             return@LaunchedEffect
         }
-        val start = viewportStartMs
-        val end = viewportStartMs + viewportSpanMs
+        // Only the part of the file that the window shows is decoded. The
+        // window may reach before the recording — the playhead stands in the
+        // middle of the screen — and the time before the recording has no
+        // audio in it (DESIGN §12.4).
+        val range = EditWindow.fileRange(
+            viewport = EditViewport(viewportStartMs, viewportSpanMs),
+            totalMs = source.durationMs,
+        ) ?: return@LaunchedEffect
+        val windowStart = viewportStartMs
+        val windowSpan = viewportSpanMs
+        val start = range.first
+        val end = range.last + 1
         val result = withContext(Dispatchers.IO) {
             PeakDecoder().decodeWindow(
                 file = source.file,
@@ -471,7 +491,7 @@ fun EditorScreen(
         }
         // The window may have moved while the decode ran; a result for the old
         // window is stale and is dropped rather than shown.
-        if (start != viewportStartMs || end != viewportStartMs + viewportSpanMs) {
+        if (windowStart != viewportStartMs || windowSpan != viewportSpanMs) {
             return@LaunchedEffect
         }
         if (result is PeakDecoder.Result.Success) {
@@ -510,10 +530,13 @@ fun EditorScreen(
         // little past it — or a little short of it, depending on where the
         // frame boundary falls. Rejecting the waveform over a fraction of a
         // frame would leave the user with the coarse one forever.
-        val coversWindow = fine != null &&
-            fine.offsetMs == viewportStartMs &&
-            fine.bucketsPerSecond >= detailResolution &&
-            fine.endMs + FRAME_TOLERANCE_MS >= viewportStartMs + viewportSpanMs
+        val coversWindow = EditWindow.covers(
+            peaks = fine,
+            viewport = EditViewport(viewportStartMs, viewportSpanMs),
+            totalMs = current?.durationMs ?: 0L,
+            requiredBucketsPerSecond = detailResolution,
+            toleranceMs = FRAME_TOLERANCE_MS,
+        )
         if (coversWindow) fine else current?.peaks
     }
 
@@ -565,27 +588,12 @@ fun EditorScreen(
                     }
                 },
                 actions = {
-                    // The editor turns the screen itself rather than following
-                    // the system: the timeline wants to be wide, and the user
-                    // decides when (DESIGN §12.4).
-                    IconButton(
-                        onClick = {
-                            val next = !landscape
-                            landscape = next
-                            activity?.requestedOrientation = if (next) {
-                                ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-                            } else {
-                                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-                            }
-                        },
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.ScreenRotation,
-                            contentDescription = stringResource(R.string.editor_rotate),
-                        )
-                    }
-                    IconButton(
-                        onClick = {
+                    // The editor locks the screen into portrait. The
+                    // landscape timeline was a half-finished idea: it turned
+                    // the phone, it did not lay the page out for it, and it
+                    // left the user with a view they had to fix. The
+                    // portrait timeline is the one that works (DESIGN §12.4).
+                    IconButton(                        onClick = {
                             val total = current?.durationMs ?: 0L
                             viewportSpanMs = EditMarkerPlan.fitSpanMs(total)
                             viewportStartMs = 0L
@@ -702,7 +710,7 @@ fun EditorScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(if (landscape) 260.dp else 220.dp),
+                        .height(220.dp),
                 ) {
                     when {
                         current == null -> Unit
@@ -1022,17 +1030,9 @@ fun EditorScreen(
                 segment = currentSegment,
                 enabled = segmentHasAudio,
                 onDelete = {
-                    val source = current ?: return@SegmentDeleteRow
-                    val result = EditMarkers.deleteSegment(
-                        keep = source.keep,
-                        markers = source.markers,
-                        segment = currentSegment,
-                        durationMs = source.durationMs,
-                    )
-                    sources = sources.replaceAt(selectedIndex) {
-                        it.copy(keep = result.keep, markers = result.markers)
-                    }
-                    selectedMarkerMs = null
+                    // Deleting a stretch of audio cannot be undone, so the
+                    // button asks first (DESIGN §12.4).
+                    pendingSegment = currentSegment
                 },
             )
 
@@ -1093,6 +1093,53 @@ fun EditorScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
         }
+    }
+
+    // --- the confirmation before a stretch of audio is taken out ---
+    //
+    // A cut cannot be undone: the audio is gone from the plan and only the
+    // export is left to undo it. The button therefore asks first, and says
+    // which stretch it is about to remove (DESIGN §12.4).
+    pendingSegment?.let { segment ->
+        AlertDialog(
+            onDismissRequest = { pendingSegment = null },
+            title = { Text(stringResource(R.string.editor_delete_confirm_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.editor_delete_confirm_body,
+                        formatDuration(segment.startMs),
+                        formatDuration(segment.endMs),
+                        formatDuration(segment.durationMs),
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingSegment = null
+                        val source = current ?: return@TextButton
+                        val result = EditMarkers.deleteSegment(
+                            keep = source.keep,
+                            markers = source.markers,
+                            segment = segment,
+                            durationMs = source.durationMs,
+                        )
+                        sources = sources.replaceAt(selectedIndex) {
+                            it.copy(keep = result.keep, markers = result.markers)
+                        }
+                        selectedMarkerMs = null
+                    },
+                ) {
+                    Text(stringResource(R.string.common_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingSegment = null }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
     }
 }
 

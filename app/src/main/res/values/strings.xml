@@ -171,9 +171,8 @@
     <string name="editor_marker_delete">删除切点 %1$s</string>
     <string name="editor_delete_segment">删除 %1$s – %2$s（%3$s）</string>
     <string name="editor_delete_segment_none">删除两个切点之间的片段</string>
-    <string name="editor_rotate">转向</string>
-    <string name="editor_rotate_landscape">横屏</string>
-    <string name="editor_rotate_portrait">竖屏</string>
+    <string name="editor_delete_confirm_title">删掉这一段？</string>
+    <string name="editor_delete_confirm_body">%1$s – %2$s（%3$s）将被删掉，删掉之后不能撤销。</string>
     <string name="editor_zoom_in">放大</string>
     <string name="editor_zoom_out">缩小</string>
     <string name="editor_zoom_fit">全览</string>
