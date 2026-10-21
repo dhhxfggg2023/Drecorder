@@ -58,9 +58,11 @@ object WaveformBins {
 
             // The buckets are addressed by their own time range rather than by an
             // index clamped to the data: a window that reaches past the recording
-            // has to draw nothing there, not the last bucket of the file.
-            val firstBucket = (columnStartMs * bucketsPerSecond / 1_000L).toInt()
-            val lastBucket = (columnEndMs * bucketsPerSecond / 1_000L).toInt()
+            // has to draw nothing there, not the last bucket of the file. The
+            // offset matters too: a waveform decoded for a window of a longer
+            // recording carries the window's start time.
+            val firstBucket = ((columnStartMs - peaks.offsetMs) * bucketsPerSecond / 1_000L).toInt()
+            val lastBucket = ((columnEndMs - peaks.offsetMs) * bucketsPerSecond / 1_000L).toInt()
             for (bucket in firstBucket..lastBucket) {
                 if (bucket < 0 || bucket >= bucketCount) continue
                 val bucketStart = peaks.bucketStartMs(bucket)

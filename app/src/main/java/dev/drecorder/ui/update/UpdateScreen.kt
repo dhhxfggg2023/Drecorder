@@ -39,7 +39,23 @@ sealed interface UpdateUiState {
     data object Checking : UpdateUiState
     data object UpToDate : UpdateUiState
     data class Available(val versionName: String, val notes: String, val forced: Boolean) : UpdateUiState
-    data class Downloading(val percent: Int) : UpdateUiState
+
+    /**
+     * A download is in flight.
+     *
+     * @param downloaded bytes fetched so far
+     * @param total the size of the file, or -1 while the server has not said
+     *   (the progress bar is then indeterminate instead of guessing)
+     */
+    data class Downloading(val downloaded: Long, val total: Long) : UpdateUiState {
+        /** The download in 0..100, or null while the total size is unknown. */
+        val percent: Int?
+            get() = if (total > 0L) {
+                ((downloaded.toDouble() / total.toDouble()) * 100.0).toInt().coerceIn(0, 100)
+            } else {
+                null
+            }
+    }
     data class ReadyToInstall(val versionName: String) : UpdateUiState
     data class Failed(val message: String) : UpdateUiState
 }
@@ -129,13 +145,31 @@ fun UpdateScreen(
                         }
 
                         is UpdateUiState.Downloading -> {
+                            val percent = state.percent
                             Text(
-                                text = stringResource(R.string.update_downloading, state.percent),
+                                text = if (percent != null) {
+                                    stringResource(R.string.update_downloading, percent)
+                                } else {
+                                    stringResource(R.string.update_downloading_unknown)
+                                },
                                 style = MaterialTheme.typography.bodyMedium,
                             )
-                            LinearProgressIndicator(
-                                progress = { state.percent / 100f },
-                                modifier = Modifier.fillMaxWidth(),
+                            if (percent != null) {
+                                LinearProgressIndicator(
+                                    progress = { percent / 100f },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            } else {
+                                // The size is not known yet: an indeterminate bar
+                                // says "working" where a 0% bar says "stuck".
+                                LinearProgressIndicator(
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                            Text(
+                                text = formatBytes(state.downloaded),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
 
@@ -245,4 +279,12 @@ private fun StatusText(text: String, highlight: Boolean = false, isError: Boolea
             else -> MaterialTheme.colorScheme.onSurface
         },
     )
+}
+
+/** A byte count as something a person can read: "12.3 MB". */
+internal fun formatBytes(bytes: Long): String = when {
+    bytes <= 0L -> "0 B"
+    bytes < 1_024L -> "$bytes B"
+    bytes < 1_048_576L -> "%.1f KB".format(bytes / 1_024.0)
+    else -> "%.1f MB".format(bytes / 1_048_576.0)
 }

@@ -17,6 +17,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -26,6 +27,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.drecorder.audio.CaptureScope
 import dev.drecorder.audio.CaptureState
 import dev.drecorder.audio.EncoderSpec
@@ -148,6 +152,23 @@ private fun DrecorderApp() {
             lastCheck = UpdateSettings.lastCheckLabel(context)
         }
         canInstall = coordinator.canInstallPackages()
+    }
+
+    // The "install unknown apps" grant is given in the system settings, so the
+    // app has to notice the change when it comes back — the update state does
+    // not change while the user is away, and reading the flag only on a state
+    // change left the screen showing "grant permission" forever. That is what
+    // made the first update look stuck: the user had to download a second time
+    // for the state to change and the flag to be re-read.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                canInstall = coordinator.canInstallPackages()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     LaunchedEffect(updateNotice) {

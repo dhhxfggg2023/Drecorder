@@ -164,6 +164,11 @@
     <string name="editor_snap_on">吸附到静音：开</string>
     <string name="editor_snap_off">吸附到静音：关</string>
     <string name="editor_format_mismatch">格式不一致，无法合并：%1$s</string>
+    <string name="editor_selection_start">起点 (ms)</string>
+    <string name="editor_selection_end">终点 (ms)</string>
+    <string name="editor_selection_length">长度 %1$s</string>
+    <string name="editor_selection_duration">长度 (ms)</string>
+    <string name="editor_overview">总览</string>
 
     <string name="update_title">检查更新</string>
     <string name="update_check">检查更新</string>
@@ -173,6 +178,7 @@
     <string name="update_available">发现新版本 %1$s</string>
     <string name="update_download">下载</string>
     <string name="update_downloading">正在下载 %1$d%%</string>
+    <string name="update_downloading_unknown">正在下载…</string>
     <string name="update_verify_failed">校验失败，已删除下载文件</string>
     <string name="update_check_failed">检查更新失败：%1$s</string>
     <string name="update_open_releases">打开发布页</string>

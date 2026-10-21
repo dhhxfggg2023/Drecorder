@@ -96,7 +96,7 @@ class UpdateCoordinator(
         if (_state.value is UpdateUiState.Downloading) return
 
         scope.launch {
-            _state.value = UpdateUiState.Downloading(0)
+            _state.value = UpdateUiState.Downloading(0L, -1L)
 
             val candidates = installer.allCandidates(target)
             var lastError: String? = null
@@ -104,7 +104,12 @@ class UpdateCoordinator(
             for (candidate in candidates) {
                 val attempt = runCatching {
                     val id = installer.enqueue(target, candidate)
-                    val file = installer.await(id)
+                    val file = installer.await(id) { downloaded, total ->
+                        // The poll runs on an IO thread, so the state is updated
+                        // from there; the flow is thread-safe and the screen
+                        // collects it.
+                        _state.value = UpdateUiState.Downloading(downloaded, total)
+                    }
                     when (val verification = checker.verifyDownloadedApk(file, target)) {
                         VerificationResult.Ok -> file
                         is VerificationResult.Failed -> {
@@ -131,7 +136,13 @@ class UpdateCoordinator(
         }
     }
 
-    /** Launches the installer for the already-verified APK. */
+    /**
+     * Launches the installer for the already-verified APK.
+     *
+     * The "install unknown apps" permission is checked *again* here: the user
+     * grants it in the system settings and comes back, and the app has to
+     * notice that the grant took effect instead of sitting on a dead button.
+     */
     fun install() {
         val target = manifest ?: return
         val apk = installer.fileFor(target)
@@ -140,9 +151,9 @@ class UpdateCoordinator(
             return
         }
         if (!installer.install(apk, target)) {
-            _notice.value = null
             // The only realistic reason here is the "install unknown apps" toggle.
             _state.value = UpdateUiState.ReadyToInstall(target.versionName)
+            _notice.value = null
         }
     }
 

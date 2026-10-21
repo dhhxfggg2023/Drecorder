@@ -53,6 +53,8 @@ import dev.drecorder.audio.edit.EditComposition
 import dev.drecorder.audio.edit.EditExportResult
 import dev.drecorder.audio.edit.EditExporter
 import dev.drecorder.audio.edit.EditFormats
+import dev.drecorder.audio.edit.EditHandle
+import dev.drecorder.audio.edit.EditOverview
 import dev.drecorder.audio.edit.EditPlan
 import dev.drecorder.audio.edit.EditPlanner
 import dev.drecorder.audio.edit.EditSilence
@@ -63,6 +65,7 @@ import dev.drecorder.audio.edit.EditViewportMath
 import dev.drecorder.audio.edit.KeepRange
 import dev.drecorder.audio.edit.PeakData
 import dev.drecorder.audio.edit.PeakDecoder
+import dev.drecorder.audio.edit.PeakLod
 import dev.drecorder.audio.edit.PeaksCache
 import dev.drecorder.audio.edit.SourceSpan
 import dev.drecorder.data.DerivedMarker
@@ -87,7 +90,20 @@ data class EditorSource(
     val file: File,
     val durationMs: Long,
     val displayName: String,
+    /**
+     * The whole recording's waveform, at the coarse resolution.
+     *
+     * It is what the overview strip draws and what the detail view falls back
+     * to when the visible window does not need anything finer.
+     */
     val peaks: PeakData? = null,
+    /**
+     * The visible window's waveform, at a finer resolution.
+     *
+     * `null` means the coarse waveform is good enough — the detail view then
+     * draws the coarse one and nothing is decoded.
+     */
+    val detailPeaks: PeakData? = null,
     val keep: List<KeepRange> = emptyList(),
     val loading: Boolean = false,
     /** How far the waveform generation has got, 0..100; -1 when not known. */
@@ -135,6 +151,11 @@ fun EditorScreen(
     // be stopped. It is reset for every source that is decoded.
     val decodeCancelled = remember { AtomicBoolean(false) }
 
+    // The window decodes have their own flag: the user who cancels the detail
+    // waveform must not also cancel the waveform of the whole recording, and
+    // the other way round.
+    val windowDecodeCancelled = remember { AtomicBoolean(false) }
+
     // The viewport is shared by all sources so that a zoom level means the same
     // thing wherever the user looks.
     var viewportStartMs by remember { mutableStateOf(0L) }
@@ -157,8 +178,14 @@ fun EditorScreen(
             )
         }
         sources = initial
-        viewportSpanMs = initial.maxOf { it.durationMs }.coerceAtLeast(1L)
-        viewportStartMs = 0L
+        // The detail view opens on a short window rather than on the whole
+        // recording: thirty seconds is what a waveform can actually show, and
+        // the overview strip above it carries the map of the rest
+        // (DESIGN §12.4).
+        val longest = initial.maxOf { it.durationMs }.coerceAtLeast(1L)
+        val opening = EditOverview.initialViewport(longest)
+        viewportSpanMs = opening.spanMs
+        viewportStartMs = opening.startMs
 
         // Transmuxing cannot convert one encoding into another, so a merge of
         // mismatched recordings is refused here, by name, rather than silently
@@ -205,6 +232,15 @@ fun EditorScreen(
                             }
                         }
                     },
+                    // A long recording is decoded in segments, and the
+                    // waveform of the part that is already done is handed
+                    // over after every segment: the overview fills in while
+                    // the rest is still being decoded.
+                    onPartial = { partial ->
+                        scope.launch {
+                            sources = sources.replaceAt(index) { it.copy(peaks = partial) }
+                        }
+                    },
                     cancelled = decodeCancelled,
                 )
             }
@@ -215,7 +251,6 @@ fun EditorScreen(
                     }
                     sources.replaceAt(index) { it.copy(peaks = decoded.data, loading = false) }
                 }
-
                 is PeakDecoder.Result.Failure ->
                     sources.replaceAt(index) {
                         it.copy(
@@ -267,6 +302,67 @@ fun EditorScreen(
     }
 
     val current = sources.getOrNull(selectedIndex)
+
+    // --- the detail window's finer waveform ------------------------------------
+    //
+    // The coarse waveform covers the whole recording and is enough for the
+    // overview. The detail view wants more resolution than the coarse one can
+    // carry, and decoding the whole file again for that would take minutes.
+    // Instead only the visible window is decoded — a few seconds of audio,
+    // which takes milliseconds (DESIGN §12.4).
+    //
+    // The resolution needed is decided by the window and the screen width, and
+    // it is one of a fixed ladder, so the same window always asks for the same
+    // one and the result can be cached.
+    val detailResolution = remember(viewportSpanMs) {
+        PeakLod.bucketsPerSecondFor(viewportSpanMs, DETAIL_WIDTH_PX)
+    }
+    // The finer waveform is needed whenever the coarse one cannot carry the
+    // window's resolution. That is true even while the coarse waveform is
+    // still being decoded: the window is a few seconds of audio and is ready
+    // in milliseconds, while the whole recording takes minutes. Waiting for
+    // the coarse one first is what made the editor feel broken.
+    val needsDetail = remember(current?.peaks, detailResolution) {
+        val cached = current?.peaks
+        cached == null || PeakLod.needsFinerWaveform(
+            spanMs = viewportSpanMs,
+            widthPx = DETAIL_WIDTH_PX,
+            cachedBucketsPerSecond = cached.bucketsPerSecond,
+        )
+    }
+
+    LaunchedEffect(current?.file, viewportStartMs, viewportSpanMs, detailResolution) {
+        val source = current ?: return@LaunchedEffect
+        // A window that was cancelled stays cancelled until the window moves
+        // again, so the user is not spammed with a decode they just refused.
+        windowDecodeCancelled.set(false)
+        if (!needsDetail) {
+            if (source.detailPeaks != null) {
+                sources = sources.replaceAt(selectedIndex) { it.copy(detailPeaks = null) }
+            }
+            return@LaunchedEffect
+        }
+        val start = viewportStartMs
+        val end = viewportStartMs + viewportSpanMs
+        val result = withContext(Dispatchers.IO) {
+            PeakDecoder().decodeWindow(
+                file = source.file,
+                startMs = start,
+                endMs = end,
+                bucketsPerSecond = detailResolution,
+                cancelled = windowDecodeCancelled,
+            )
+        }
+        // The window may have moved while the decode ran; a result for the old
+        // window is stale and is dropped rather than shown.
+        if (start != viewportStartMs || end != viewportStartMs + viewportSpanMs) {
+            return@LaunchedEffect
+        }
+        if (result is PeakDecoder.Result.Success) {
+            sources = sources.replaceAt(selectedIndex) { it.copy(detailPeaks = result.data) }
+        }
+    }
+
     val plan = remember(sources) {
         EditPlan(
             sources.map { source ->
@@ -281,6 +377,30 @@ fun EditorScreen(
     val removed = current?.let {
         EditPlanner.complement(it.keep, it.durationMs)
     } ?: emptyList()
+
+    // The waveform the detail view draws: the fine one when it belongs to the
+    // window that is on screen, the coarse one otherwise. A fine waveform of
+    // an earlier window would show the wrong part of the recording.
+    val visiblePeaks = remember(
+        current?.detailPeaks,
+        current?.peaks,
+        viewportStartMs,
+        viewportSpanMs,
+        detailResolution,
+    ) {
+        val fine = current?.detailPeaks
+        // The fine waveform has to be *this* window's, and it has to be at
+        // least as fine as the window needs. The length is compared with a
+        // tolerance of one bucket: the last bucket of a window is usually
+        // short, and rejecting the waveform over that would leave the user
+        // with the coarse one forever.
+        val bucketMs = 1_000L / (fine?.bucketsPerSecond?.coerceAtLeast(1) ?: 1).toLong()
+        val coversWindow = fine != null &&
+            fine.offsetMs == viewportStartMs &&
+            fine.bucketsPerSecond >= detailResolution &&
+            fine.endMs + bucketMs >= viewportStartMs + viewportSpanMs
+        if (coversWindow) fine else current?.peaks
+    }
 
     // The source the preview is currently playing, so the playhead can sit on
     // the recording that is actually sounding.
@@ -393,6 +513,20 @@ fun EditorScreen(
                             onClick = {
                                 selectedIndex = index
                                 selection = null
+                                // The window is shared by all the sources, but
+                                // one source may be shorter than the window
+                                // that is on screen: the window is pulled back
+                                // onto the recording that was just chosen,
+                                // otherwise the detail view would show a
+                                // stretch of audio that does not exist.
+                                val total = sources.getOrNull(index)?.durationMs
+                                    ?.coerceAtLeast(1L) ?: return@FilterChip
+                                val span = viewportSpanMs.coerceIn(
+                                    EditViewportMath.MIN_SPAN_MS.coerceAtMost(total),
+                                    total,
+                                )
+                                viewportSpanMs = span
+                                viewportStartMs = viewportStartMs.coerceIn(0L, total - span)
                             },
                             label = {
                                 Text(
@@ -405,6 +539,21 @@ fun EditorScreen(
                     }
                 }
             }
+
+            // --- the overview strip: the whole recording, with the viewport ---
+            OverviewStrip(
+                peaks = current?.peaks,
+                totalMs = current?.durationMs ?: 0L,
+                viewportStartMs = viewportStartMs,
+                viewportSpanMs = viewportSpanMs,
+                onViewportMove = { start, span ->
+                    viewportStartMs = start
+                    viewportSpanMs = span
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
 
             // --- the waveform ---
             Surface(
@@ -419,6 +568,62 @@ fun EditorScreen(
                 ) {
                     when {
                         current == null -> Unit
+
+                        // A waveform that exists is drawn, even while the rest
+                        // is still being decoded. A spinner that covers the
+                        // whole view is what made a long recording look
+                        // broken: the detail waveform is ready in milliseconds
+                        // and the coarse one takes minutes, and neither of
+                        // them should hide the other.
+                        visiblePeaks != null -> Box {
+                            WaveformView(
+                                // The finer waveform of the visible window
+                                // wins when it is there; the coarse one is
+                                // the fallback while the window is being
+                                // decoded.
+                                peaks = visiblePeaks,
+                                durationMs = current.durationMs,
+                                startMs = viewportStartMs,
+                                spanMs = viewportSpanMs,
+                                removed = removed,
+                                selection = selection,
+                                playheadMs = playheadMs,
+                                onSelectionChange = { selection = it },
+                                onSelectionCommit = { selection = it },
+                                onViewportGesture = { zoom, panFraction, focusFraction ->
+                                    // The maths lives in core-audio so it can be
+                                    // unit-tested: a window that leaves the recording
+                                    // would show a waveform that matches no audio.
+                                    val total = sources.maxOf { it.durationMs }.coerceAtLeast(1L)
+                                    val next = EditViewportMath.apply(
+                                        current = EditViewport(viewportStartMs, viewportSpanMs),
+                                        totalMs = total,
+                                        zoomFactor = zoom,
+                                        panFraction = panFraction,
+                                        focusFraction = focusFraction,
+                                    )
+                                    viewportStartMs = next.startMs
+                                    viewportSpanMs = next.spanMs
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            // A quiet hint in the corner, so the user knows
+                            // the waveform is still being sharpened.
+                            if (current.loading || current.loadProgress in 0..99) {
+                                Text(
+                                    text = stringResource(
+                                        R.string.editor_waveform_loading,
+                                        current.loadProgress.coerceAtLeast(0),
+                                    ),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier
+                                        .align(Alignment.BottomEnd)
+                                        .padding(6.dp),
+                                )
+                            }
+                        }
+
                         current.loading -> Column(
                             modifier = Modifier.align(Alignment.Center),
                             horizontalAlignment = Alignment.CenterHorizontally,
@@ -444,7 +649,7 @@ fun EditorScreen(
                             }
                         }
 
-                        current.peaks == null -> Text(
+                        else -> Text(
                             text = current.loadError
                                 ?: stringResource(R.string.editor_waveform_failed),
                             modifier = Modifier
@@ -452,37 +657,16 @@ fun EditorScreen(
                                 .padding(16.dp),
                             style = MaterialTheme.typography.bodyMedium,
                         )
-
-                        else -> WaveformView(
-                            peaks = current.peaks,
-                            durationMs = current.durationMs,
-                            startMs = viewportStartMs,
-                            spanMs = viewportSpanMs,
-                            removed = removed,
-                            selection = selection,
-                            playheadMs = playheadMs,
-                            onSelectionChange = { selection = it },
-                            onSelectionCommit = { selection = it },
-                            onViewportGesture = { zoom, panFraction, focusFraction ->
-                                // The maths lives in core-audio so it can be
-                                // unit-tested: a window that leaves the recording
-                                // would show a waveform that matches no audio.
-                                val total = sources.maxOf { it.durationMs }.coerceAtLeast(1L)
-                                val next = EditViewportMath.apply(
-                                    current = EditViewport(viewportStartMs, viewportSpanMs),
-                                    totalMs = total,
-                                    zoomFactor = zoom,
-                                    panFraction = panFraction,
-                                    focusFraction = focusFraction,
-                                )
-                                viewportStartMs = next.startMs
-                                viewportSpanMs = next.spanMs
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
                     }
                 }
             }
+
+            // --- the exact numbers of the selection ---
+            SelectionPanel(
+                selection = selection,
+                totalMs = current?.durationMs ?: 0L,
+                onSelectionChange = { selection = it },
+            )
 
             Spacer(modifier = Modifier.height(10.dp))
 
@@ -661,3 +845,14 @@ private fun List<EditorSource>.replaceAt(
     } else {
         toMutableList().also { it[index] = transform(it[index]) }
     }
+
+/**
+ * The width the detail view is assumed to have, in pixels.
+ *
+ * The resolution the window needs depends on how many columns it is drawn in,
+ * and the real width is only known once the layout has run. A phone screen is
+ * roughly 1080 pixels wide, and asking for a waveform that is one step finer
+ * than that is not worth a second decode — so the assumption is a wide one and
+ * the ladder absorbs the difference.
+ */
+private const val DETAIL_WIDTH_PX = 1_080

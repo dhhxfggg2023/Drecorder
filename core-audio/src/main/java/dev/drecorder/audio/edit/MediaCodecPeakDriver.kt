@@ -129,13 +129,136 @@ class PeakDecoder(
     /**
      * Decodes [file] and returns its peak data.
      *
+     * A long recording is decoded in **segments**, and the waveform of what
+     * has been decoded so far is handed to [onPartial] after every segment.
+     * That is the difference between a waveform that appears after a minute
+     * and one that appears after a second and grows while the rest is still
+     * being decoded (DESIGN §12.4).
+     *
      * @param onProgress receives a percentage in 0..100
+     * @param onPartial receives the waveform of the whole recording as far as
+     *   it has been decoded
      * @param cancelled consulted between chunks so a long decode can be stopped
      */
     fun decode(
         file: File,
         onProgress: ((Int) -> Unit)? = null,
+        onPartial: ((PeakData) -> Unit)? = null,
         cancelled: AtomicBoolean = AtomicBoolean(false),
+    ): Result = decodeSegmented(file, onProgress, onPartial, cancelled)
+
+    /**
+     * Decodes [file] in segments and assembles the whole waveform from them.
+     *
+     * The segments are decoded one after another, each one a window of the
+     * recording, so the first piece of the waveform is on screen long before
+     * the last one is done. The progress is measured against the whole
+     * recording, not against the segment.
+     */
+    private fun decodeSegmented(
+        file: File,
+        onProgress: ((Int) -> Unit)?,
+        onPartial: ((PeakData) -> Unit)?,
+        cancelled: AtomicBoolean,
+    ): Result {
+        if (!file.isFile) return Result.Failure("文件已不存在")
+        val totalMs = durationOf(file) ?: return decodeInternal(
+            file,
+            null,
+            bucketsPerSecond,
+            onProgress,
+            cancelled,
+        )
+        // A short recording is decoded in one go: splitting it would only add
+        // the overhead of a seek per segment.
+        if (totalMs <= SEGMENT_MS) {
+            return decodeInternal(file, null, bucketsPerSecond, onProgress, cancelled)
+        }
+
+        val assembly = PeakAssembly(bucketsPerSecond, totalMs)
+        var start = 0L
+        while (start < totalMs) {
+            if (cancelled.get()) return Result.Failure("已取消", reason = Reason.Cancelled)
+            val end = (start + SEGMENT_MS).coerceAtMost(totalMs)
+            val segmentStart = start
+            val segment = decodeInternal(
+                file = file,
+                window = PeakWindow(segmentStart * 1_000L, end * 1_000L),
+                bucketsPerSecond = bucketsPerSecond,
+                onProgress = { percent ->
+                    val done = segmentStart + (end - segmentStart) * percent / 100L
+                    onProgress?.invoke(((done * 100L) / totalMs).toInt().coerceIn(0, 99))
+                },
+                cancelled = cancelled,
+            )
+            when (segment) {
+                is Result.Success -> {
+                    assembly.add(segment.data)
+                    onPartial?.invoke(assembly.snapshot())
+                }
+
+                is Result.Failure -> return segment
+            }
+            start = end
+        }
+        onProgress?.invoke(100)
+        return Result.Success(assembly.snapshot())
+    }
+
+    /**
+     * How long the recording is, in ms, or null when the container does not say.
+     */
+    private fun durationOf(file: File): Long? {
+        val extractor = MediaExtractor()
+        return try {
+            extractor.setDataSource(file.absolutePath)
+            for (index in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(index)
+                val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
+                if (!mime.startsWith("audio/")) continue
+                val durationUs = format.getLong(MediaFormat.KEY_DURATION, 0L)
+                return if (durationUs > 0L) durationUs / 1_000L else null
+            }
+            null
+        } catch (_: Exception) {
+            null
+        } finally {
+            runCatching { extractor.release() }
+        }
+    }
+
+    /**
+     * Decodes only the part of [file] that is on screen.
+     *
+     * This is what makes the editor usable on a long recording: the whole file
+     * is decoded once (while recording, or on first use) and gives the
+     * overview, but the *detail* view wants a resolution the overview cannot
+     * carry. Decoding the entire file again for that would take minutes, so
+     * only the visible window is decoded — a few seconds of audio, which takes
+     * milliseconds (DESIGN §12.4).
+     *
+     * @param startMs the first moment to decode
+     * @param endMs the last moment to decode
+     */
+    fun decodeWindow(
+        file: File,
+        startMs: Long,
+        endMs: Long,
+        bucketsPerSecond: Int = this.bucketsPerSecond,
+        onProgress: ((Int) -> Unit)? = null,
+        cancelled: AtomicBoolean = AtomicBoolean(false),
+    ): Result {
+        if (endMs <= startMs) return Result.Failure("时间范围为空")
+        val window = PeakWindow(startMs * 1_000L, endMs * 1_000L)
+        return decodeInternal(file, window, bucketsPerSecond, onProgress, cancelled)
+    }
+
+    private fun decodeInternal(
+        file: File,
+        window: PeakWindow?,
+        bucketsPerSecond: Int,
+        onProgress: ((Int) -> Unit)?,
+        cancelled: AtomicBoolean,
     ): Result {
         if (!file.isFile) return Result.Failure("文件已不存在")
 
@@ -164,6 +287,12 @@ class PeakDecoder(
             val durationUs = format.getLong(MediaFormat.KEY_DURATION, 0L)
 
             extractor.selectTrack(trackIndex)
+            // The seek lands on the sync frame at or before the window's start.
+            // The loop drops the samples that are still too early, so the
+            // window's first milliseconds are complete.
+            if (window != null) {
+                extractor.seekTo(window.startUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+            }
             codec = MediaCodec.createDecoderByType(mime)
             codec.configure(format, null, null, 0)
             codec.start()
@@ -176,6 +305,7 @@ class PeakDecoder(
                 channelCount = channelCount,
                 bucketsPerSecond = bucketsPerSecond,
                 durationUs = durationUs,
+                window = window,
                 onProgress = onProgress,
             )
 
@@ -193,6 +323,8 @@ class PeakDecoder(
                         trackIndex,
                         outcome.sampleRate,
                         outcome.channelCount,
+                        window,
+                        bucketsPerSecond,
                         onProgress,
                         cancelled,
                     )
@@ -225,11 +357,22 @@ class PeakDecoder(
         trackIndex: Int,
         sampleRate: Int,
         channelCount: Int,
+        window: PeakWindow?,
+        bucketsPerSecond: Int,
         onProgress: ((Int) -> Unit)?,
         cancelled: AtomicBoolean,
     ): Result {
-        extractor.seekTo(0L, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
-        return decodeFresh(extractor, trackIndex, sampleRate, channelCount, onProgress, cancelled)
+        extractor.seekTo(window?.startUs ?: 0L, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+        return decodeFresh(
+            extractor,
+            trackIndex,
+            sampleRate,
+            channelCount,
+            window,
+            bucketsPerSecond,
+            onProgress,
+            cancelled,
+        )
     }
 
     private fun decodeFresh(
@@ -237,6 +380,8 @@ class PeakDecoder(
         trackIndex: Int,
         sampleRate: Int,
         channelCount: Int,
+        window: PeakWindow?,
+        bucketsPerSecond: Int,
         onProgress: ((Int) -> Unit)?,
         cancelled: AtomicBoolean,
     ): Result {
@@ -258,6 +403,7 @@ class PeakDecoder(
                 channelCount = channelCount,
                 bucketsPerSecond = bucketsPerSecond,
                 durationUs = durationUs,
+                window = window,
                 onProgress = onProgress,
             )
 
@@ -282,5 +428,16 @@ class PeakDecoder(
             runCatching { codec.stop() }
             runCatching { codec.release() }
         }
+    }
+
+    private companion object {
+        /**
+         * How long one segment of a long recording is.
+         *
+         * Two minutes is long enough that the seek per segment is negligible,
+         * and short enough that the first piece of the waveform appears within
+         * a second or two of the editor opening.
+         */
+        const val SEGMENT_MS = 120_000L
     }
 }

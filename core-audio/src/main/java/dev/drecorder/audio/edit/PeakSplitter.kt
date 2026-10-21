@@ -61,6 +61,9 @@ object PeakSplitter {
  *
  * A range that is empty produces a data set with no buckets, which is a
  * legitimate result: a file that held no audio has an empty waveform.
+ *
+ * The slice starts at zero: it becomes the waveform of a **file**, and every
+ * file has its own time axis starting at its first sample.
  */
 fun PeakData.slice(from: Int, to: Int): PeakData {
     val start = from.coerceIn(0, bucketCount)
@@ -73,5 +76,6 @@ fun PeakData.slice(from: Int, to: Int): PeakData {
         bucketsPerSecond = bucketsPerSecond,
         mins = mins.copyOfRange(start, end),
         maxs = maxs.copyOfRange(start, end),
+        offsetMs = 0L,
     )
 }

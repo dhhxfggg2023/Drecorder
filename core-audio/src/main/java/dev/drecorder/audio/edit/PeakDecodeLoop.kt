@@ -31,6 +31,14 @@ class PeakDecodeLoop(
     private val channelCount: Int,
     private val bucketsPerSecond: Int = PeakData.DEFAULT_BUCKETS_PER_SECOND,
     private val durationUs: Long = 0L,
+    /**
+     * The part of the recording to decode; null means the whole recording.
+     *
+     * A window exists so that zooming into a long recording does not mean
+     * decoding the whole thing again: only the seconds on screen are decoded,
+     * which takes milliseconds instead of minutes (DESIGN §12.4).
+     */
+    private val window: PeakWindow? = null,
     /** Called with a percentage in 0..99 as the decode proceeds. */
     private val onProgress: ((Int) -> Unit)? = null,
 ) {
@@ -39,12 +47,28 @@ class PeakDecodeLoop(
     val stats = PeakDecodeStats()
 
     private val codecBuffer = PeakCodecBuffer()
-    private val bins = PeakBins(sampleRate, channelCount, bucketsPerSecond)
+    private val bins = PeakBins(
+        sampleRate = sampleRate,
+        channelCount = channelCount,
+        bucketsPerSecond = bucketsPerSecond,
+        offsetMs = window?.startMs ?: 0L,
+    )
     private val pcm = ShortArray(PCM_CHUNK_FRAMES * channelCount)
     private var formatChangedTo: PeakCodecFormat? = null
     private var sawOutputEnd = false
     private var lastPercent = -1
     private var emptyWaits = 0
+
+    /**
+     * The newest presentation time the decoder has produced.
+     *
+     * The progress is taken from this and not from the buffer that was last
+     * dequeued: the end-of-stream buffer carries no presentation time at all,
+     * so a bar that followed it would jump back to zero at the very end —
+     * which is exactly the "the progress restarted" that a user reads as a
+     * hang.
+     */
+    private var newestTimeUs = 0L
 
     /**
      * Runs the decode to the end.
@@ -70,10 +94,31 @@ class PeakDecodeLoop(
                     driver.queueEndOfStream(index)
                     sawInputEnd = true
                 } else {
-                    driver.queueInputBuffer(index, size, source.sampleTimeUs)
-                    source.advance()
-                    stats.inputBuffers++
-                    fed++
+                    val timeUs = source.sampleTimeUs
+                    val active = window
+                    when {
+                        // Past the window: stop feeding. The decoder is told
+                        // the stream ended so it flushes what it has.
+                        active != null && timeUs >= active.endUs -> {
+                            driver.queueEndOfStream(index)
+                            sawInputEnd = true
+                        }
+
+                        // Before the window: the seek landed a little early,
+                        // so this sample belongs to the part that is off
+                        // screen. It is dropped, not decoded.
+                        active != null && timeUs < active.startUs -> {
+                            source.advance()
+                            stats.skippedSamples++
+                        }
+
+                        else -> {
+                            driver.queueInputBuffer(index, size, timeUs)
+                            source.advance()
+                            stats.inputBuffers++
+                            fed++
+                        }
+                    }
                 }
             }
 
@@ -107,8 +152,10 @@ class PeakDecodeLoop(
             if (produced > 0) {
                 // Progress must never go backwards: the end-of-stream buffer
                 // carries no presentation time, and a bar that jumps back to
-                // zero at the end looks like a restart.
-                val percent = percentOf(codecBuffer.presentationTimeUs)
+                // zero at the end looks like a restart. The time is taken
+                // from the newest buffer that was actually decoded, not from
+                // the one that was dequeued last.
+                val percent = percentOf(newestTimeUs)
                 if (percent > lastPercent) {
                     lastPercent = percent
                     stats.lastPercent = percent
@@ -145,6 +192,11 @@ class PeakDecodeLoop(
                     if (output != null && codecBuffer.size > 0) {
                         readInto(bins, output, codecBuffer, channelCount, pcm)
                     }
+                    if (!codecBuffer.endOfStream &&
+                        codecBuffer.presentationTimeUs > newestTimeUs
+                    ) {
+                        newestTimeUs = codecBuffer.presentationTimeUs
+                    }
                     driver.releaseOutputBuffer(result.index)
                     stats.outputBuffers++
                     produced++
@@ -166,8 +218,13 @@ class PeakDecodeLoop(
     }
 
     private fun percentOf(presentationTimeUs: Long): Int {
-        if (durationUs <= 0L) return 0
-        return ((presentationTimeUs * 100L) / durationUs).toInt().coerceIn(0, 99)
+        // A window is measured against its own length, the whole recording
+        // against the whole length: the bar must reach 100% either way.
+        val active = window
+        val fromUs = active?.startUs ?: 0L
+        val spanUs = active?.let { it.endUs - it.startUs } ?: durationUs
+        if (spanUs <= 0L) return 0
+        return (((presentationTimeUs - fromUs) * 100L) / spanUs).toInt().coerceIn(0, 99)
     }
 
     /**
@@ -267,6 +324,12 @@ class PeakDecodeStats {
 
     /** Times the loop had to wait for the decoder to produce something. */
     var blockingWaits: Int = 0
+
+    /**
+     * Samples that were read but not decoded, because they fell before the
+     * window that was asked for.
+     */
+    var skippedSamples: Int = 0
 
     /** The last progress percentage seen, 0..99. */
     var lastPercent: Int = 0

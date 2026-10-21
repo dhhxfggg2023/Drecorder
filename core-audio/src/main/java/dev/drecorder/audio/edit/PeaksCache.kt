@@ -19,7 +19,7 @@ import java.io.IOException
 object PeaksCache {
 
     private const val MAGIC = 0x4452504B // "DRPK"
-    private const val VERSION = 1
+    private const val VERSION = 2
 
     /**
      * The cache file for [recording].
@@ -49,6 +49,7 @@ object PeaksCache {
             out.writeInt(data.channelCount)
             out.writeInt(data.bucketsPerSecond)
             out.writeInt(data.bucketCount)
+            out.writeLong(data.offsetMs)
             out.writeLong(source.length())
             out.writeLong(source.lastModified())
             for (index in 0 until data.bucketCount) {
@@ -80,6 +81,7 @@ object PeaksCache {
                 val channelCount = input.readInt()
                 val bucketsPerSecond = input.readInt()
                 val bucketCount = input.readInt()
+                val offsetMs = input.readLong()
                 val sourceSize = input.readLong()
                 val sourceModified = input.readLong()
                 if (sampleRate <= 0 || channelCount <= 0 || bucketsPerSecond <= 0 || bucketCount < 0) {
@@ -102,6 +104,7 @@ object PeaksCache {
                         bucketsPerSecond = bucketsPerSecond,
                         mins = mins,
                         maxs = maxs,
+                        offsetMs = offsetMs,
                     ),
                     sourceSizeBytes = sourceSize,
                     sourceModifiedAtMillis = sourceModified,

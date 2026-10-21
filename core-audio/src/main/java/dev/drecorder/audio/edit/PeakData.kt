@@ -30,6 +30,15 @@ class PeakData(
     val bucketsPerSecond: Int,
     val mins: ShortArray,
     val maxs: ShortArray,
+    /**
+     * The time the first bucket starts at, in ms.
+     *
+     * Zero for a waveform of a whole recording. A waveform decoded for a
+     * *window* of a recording carries the window's start, so that the same
+     * time axis applies to both and a window can be drawn without knowing
+     * where it came from (DESIGN §12.4).
+     */
+    val offsetMs: Long = 0L,
 ) {
 
     init {
@@ -44,6 +53,9 @@ class PeakData(
 
     /** Audio time the buckets cover. */
     val durationMs: Long get() = bucketCount.toLong() * 1_000L / bucketsPerSecond
+
+    /** The time the last bucket ends at, in ms. */
+    val endMs: Long get() = offsetMs + durationMs
 
     /** The smallest sample value of the bucket at [index]. */
     fun minAt(index: Int): Int = mins[index].toInt()
@@ -66,12 +78,12 @@ class PeakData(
 
     /** The time the bucket at [index] starts at, in ms. */
     fun bucketStartMs(index: Int): Long =
-        index.toLong() * 1_000L / bucketsPerSecond
+        offsetMs + index.toLong() * 1_000L / bucketsPerSecond
 
     /** The index of the bucket that contains [timeMs], clamped to the data. */
     fun bucketIndexAt(timeMs: Long): Int {
         if (bucketCount == 0) return 0
-        val index = (timeMs * bucketsPerSecond / 1_000L).toInt()
+        val index = ((timeMs - offsetMs) * bucketsPerSecond / 1_000L).toInt()
         return index.coerceIn(0, bucketCount - 1)
     }
 
@@ -146,6 +158,14 @@ class PeakBins(
     val sampleRate: Int,
     val channelCount: Int,
     val bucketsPerSecond: Int,
+    /**
+     * The time the first bucket starts at, in ms.
+     *
+     * Zero for a whole recording. A waveform built for a *window* of a
+     * recording carries the window's start, so it can be drawn on the same
+     * time axis as everything else (DESIGN §12.4).
+     */
+    val offsetMs: Long = 0L,
 ) {
 
     init {
@@ -223,6 +243,7 @@ class PeakBins(
             bucketsPerSecond = bucketsPerSecond,
             mins = mins.copyOf(count),
             maxs = maxs.copyOf(count),
+            offsetMs = offsetMs,
         )
     }
 

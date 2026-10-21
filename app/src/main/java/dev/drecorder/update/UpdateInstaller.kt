@@ -65,23 +65,47 @@ class UpdateInstaller(private val context: Context) {
      * completion broadcast is also delivered to the system UI, so observing it buys
      * nothing here, while a poll loop is cancellation-safe, needs no receiver
      * registration, and still returns immediately on a four-second cadence.
+     *
+     * [onProgress] receives the bytes downloaded so far and the total (which is
+     * negative while the size is still unknown). The caller needs it: without a
+     * progress callback the screen can only show a spinner, and a 50 MB download
+     * that shows nothing at all reads as "hung".
+     *
      * Throws on download failure; callers wrap this in `runCatching`.
      */
     suspend fun await(
         downloadId: Long,
-        pollIntervalMs: Long = 4_000L,
+        pollIntervalMs: Long = 1_000L,
+        onProgress: ((downloaded: Long, total: Long) -> Unit)? = null,
     ): File = withContext(Dispatchers.IO) {
         val manager = appContext.getSystemService(DownloadManager::class.java)
         while (true) {
-            val status = manager.query(DownloadManager.Query().setFilterById(downloadId))?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+            val row = manager.query(DownloadManager.Query().setFilterById(downloadId))?.use { cursor ->
+                if (!cursor.moveToFirst()) {
+                    null
                 } else {
-                    DownloadManager.STATUS_FAILED
+                    DownloadRow(
+                        status = cursor.getInt(
+                            cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS),
+                        ),
+                        downloaded = cursor.getLong(
+                            cursor.getColumnIndexOrThrow(
+                                DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR,
+                            ),
+                        ),
+                        total = cursor.getLong(
+                            cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES),
+                        ),
+                    )
                 }
-            } ?: DownloadManager.STATUS_FAILED
+            }
 
-            when (status) {
+            val current = row
+            if (current == null) error("download failed")
+
+            onProgress?.invoke(current.downloaded, current.total)
+
+            when (current.status) {
                 DownloadManager.STATUS_SUCCESSFUL -> return@withContext localFileFor(downloadId)
                 DownloadManager.STATUS_FAILED -> error("download failed")
                 else -> delay(pollIntervalMs)
@@ -90,6 +114,13 @@ class UpdateInstaller(private val context: Context) {
         @Suppress("UNREACHABLE_CODE")
         error("unreachable")
     }
+
+    /** One row of a download query. */
+    private data class DownloadRow(
+        val status: Int,
+        val downloaded: Long,
+        val total: Long,
+    )
 
     /** Progress of a download in flight, or null when the query fails. */
     fun progress(downloadId: Long): Pair<Long, Long>? {

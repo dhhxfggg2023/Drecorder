@@ -31,6 +31,9 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.drecorder.audio.edit.EditHandle
+import dev.drecorder.audio.edit.EditRange
+import dev.drecorder.audio.edit.EditSelectionMath
 import dev.drecorder.audio.edit.KeepRange
 import dev.drecorder.audio.edit.PeakData
 import dev.drecorder.audio.edit.WaveformBins
@@ -54,7 +57,8 @@ data class TimeSelection(val startMs: Long, val endMs: Long) {
  *
  * Gestures:
  * - one finger drags out a selection;
- * - two fingers pan and zoom.
+ * - two fingers pan and zoom;
+ * - a touch near a selection edge grabs that edge's handle instead.
  *
  * Panning and zooming are reported upwards as deltas rather than applied here,
  * because the viewport is owned by the editor screen: two sources edited in one
@@ -118,6 +122,22 @@ fun WaveformView(
                     var mode = GestureMode.UNDECIDED
                     var dragged: TimeSelection? = null
 
+                    // A touch that lands on a selection edge grabs that edge
+                    // instead of starting a new selection. The edge is drawn
+                    // three pixels wide but is hit over 48, because a finger
+                    // cannot aim at three pixels (DESIGN §12.4).
+                    var grabbedHandle = EditHandle.None
+                    val existing = currentSelection
+                    if (existing != null && currentWidth > 0) {
+                        grabbedHandle = EditSelectionMath.handleAt(
+                            xPx = down.position.x,
+                            widthPx = currentWidth.toFloat(),
+                            startMs = currentStart,
+                            spanMs = currentSpan,
+                            range = EditRange(existing.startMs, existing.endMs),
+                        )
+                    }
+
                     while (true) {
                         val event = awaitPointerEvent()
                         val pressed = event.changes.filter { it.pressed }
@@ -154,10 +174,24 @@ fun WaveformView(
                                     currentStart,
                                     currentSpan,
                                 )
-                                val next = TimeSelection(
-                                    min(anchorMs, currentMs),
-                                    max(anchorMs, currentMs),
-                                )
+                                val next = if (grabbedHandle != EditHandle.None && existing != null) {
+                                    // Dragging a handle moves that edge only.
+                                    val moved = EditSelectionMath.moveHandle(
+                                        range = EditRange(existing.startMs, existing.endMs),
+                                        handle = grabbedHandle,
+                                        xPx = change.position.x,
+                                        widthPx = currentWidth.toFloat(),
+                                        startMs = currentStart,
+                                        spanMs = currentSpan,
+                                        totalMs = durationMs,
+                                    )
+                                    TimeSelection(moved.startMs, moved.endMs)
+                                } else {
+                                    TimeSelection(
+                                        min(anchorMs, currentMs),
+                                        max(anchorMs, currentMs),
+                                    )
+                                }
                                 dragged = next
                                 selectionChange(next)
                                 change.consume()
@@ -245,6 +279,19 @@ fun WaveformView(
                         start = Offset(clippedRight, waveTop),
                         end = Offset(clippedRight, waveBottom),
                         strokeWidth = 2.dp.toPx(),
+                    )
+                    // A grab bar at the top of each edge: the line itself is
+                    // too thin to aim at, so the handle gets a visible head.
+                    val handleHeight = 14.dp.toPx()
+                    drawRect(
+                        color = waveColor,
+                        topLeft = Offset(clippedLeft - 2.dp.toPx(), waveTop),
+                        size = Size(4.dp.toPx(), handleHeight),
+                    )
+                    drawRect(
+                        color = waveColor,
+                        topLeft = Offset(clippedRight - 2.dp.toPx(), waveTop),
+                        size = Size(4.dp.toPx(), handleHeight),
                     )
                 }
             }

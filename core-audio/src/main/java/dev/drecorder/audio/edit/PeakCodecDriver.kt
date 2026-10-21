@@ -106,3 +106,27 @@ interface PeakSampleSource {
     /** Moves to the next sample. */
     fun advance()
 }
+
+/**
+ * The part of a recording a decode is about.
+ *
+ * A window is a half-open range of presentation times: `[startUs, endUs)`.
+ * The decoder is fed only the samples inside it, and the waveform that comes
+ * out is *offset* by [startUs] so that it can be drawn on the same time axis
+ * as the rest of the recording (DESIGN §12.4).
+ */
+data class PeakWindow(val startUs: Long, val endUs: Long) {
+
+    init {
+        require(endUs > startUs) { "the window must not be empty" }
+    }
+
+    /** The window in milliseconds. */
+    val startMs: Long get() = startUs / 1_000L
+
+    /** The window's end in milliseconds. */
+    val endMs: Long get() = endUs / 1_000L
+
+    /** Whether the time [timeUs] is inside the window. */
+    fun contains(timeUs: Long): Boolean = timeUs in startUs until endUs
+}
