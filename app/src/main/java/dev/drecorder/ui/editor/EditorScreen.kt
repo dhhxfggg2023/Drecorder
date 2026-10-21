@@ -23,10 +23,7 @@ import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.ZoomIn
-import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material.icons.filled.ZoomOutMap
-import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -864,59 +861,19 @@ fun EditorScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             // --- the zoom: the window onto the recording ---
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                IconButton(
-                    onClick = {
-                        val total = current?.durationMs ?: 0L
-                        val next = EditMarkerPlan.nextSpanMs(
-                            current = viewportSpanMs,
-                            zoomIn = true,
-                            totalMs = total,
-                        )
-                        viewportSpanMs = next
-                        viewportStartMs = EditFollow
-                            .pinned(playheadMs = playheadMs, spanMs = next, totalMs = total)
-                            .startMs
-                    },
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.ZoomIn,
-                        contentDescription = stringResource(R.string.editor_zoom_in),
-                    )
-                }
-                IconButton(
-                    onClick = {
-                        val total = current?.durationMs ?: 0L
-                        val next = EditMarkerPlan.nextSpanMs(
-                            current = viewportSpanMs,
-                            zoomIn = false,
-                            totalMs = total,
-                        )
-                        viewportSpanMs = next
-                        viewportStartMs = EditFollow
-                            .pinned(playheadMs = playheadMs, spanMs = next, totalMs = total)
-                            .startMs
-                    },
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.ZoomOut,
-                        contentDescription = stringResource(R.string.editor_zoom_out),
-                    )
-                }
-                Text(
-                    text = stringResource(
-                        R.string.editor_span,
-                        formatDuration(viewportSpanMs),
-                    ),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(modifier = Modifier.weight(1f))
-            }
+            //
+            // The +/− buttons are gone: two fingers on the waveform zoom and pan
+            // it, which is what the user asked for and what every other mobile
+            // editor does. What is left of the row is the readout, so the
+            // gesture still says how much of the recording is on screen.
+            Text(
+                text = stringResource(
+                    R.string.editor_span,
+                    formatDuration(viewportSpanMs),
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
 
             // --- the transport: play, and where the playhead is ---
             Row(
@@ -1015,7 +972,7 @@ fun EditorScreen(
                 },
                 onAddAtPlayhead = {
                     val source = current ?: return@MarkerBar
-                    val raw = playheadMs
+                    val raw = playheadMs.coerceIn(0L, source.durationMs)
                     // A cut is nudged to the nearest pause: cutting in the
                     // middle of a word is the most common way to make an edit
                     // sound wrong (DESIGN §12.4).
@@ -1024,16 +981,22 @@ fun EditorScreen(
                         timeMs = raw,
                         enabled = snapEnabled,
                     )
+                    // Two cuts a second apart snap to the *same* pause, and
+                    // inserting the second one would then be a no-op: that is
+                    // why the second cut point used to refuse to appear. The
+                    // snap is a preference, so it yields to the user's finger
+                    // rather than swallowing the cut.
+                    val at = if (snapped in source.markers) raw else snapped
                     sources = sources.replaceAt(selectedIndex) {
                         it.copy(
                             markers = EditMarkers.insert(
                                 markers = it.markers,
-                                atMs = snapped,
+                                atMs = at,
                                 totalMs = it.durationMs,
                             ),
                         )
                     }
-                    selectedMarkerMs = snapped
+                    selectedMarkerMs = at
                 },
                 onDelete = { ms ->
                     sources = sources.replaceAt(selectedIndex) {
@@ -1051,15 +1014,22 @@ fun EditorScreen(
             Spacer(modifier = Modifier.height(4.dp))
 
             // --- the cut: take the stretch between two markers out ---
-            SegmentDeleteRow(
-                segment = currentSegment,
-                enabled = segmentHasAudio,
-                onDelete = {
-                    // Deleting a stretch of audio cannot be undone, so the
-                    // button asks first (DESIGN §12.4).
-                    pendingSegment = currentSegment
-                },
-            )
+            //
+            // Only shown when there are markers. Without them there is no
+            // stretch to take out, and a "delete the whole segment" button that
+            // is one tap away from wiping the recording is a trap, not an
+            // option (the user hit it).
+            if (!current?.markers.isNullOrEmpty()) {
+                SegmentDeleteRow(
+                    segment = currentSegment,
+                    enabled = segmentHasAudio,
+                    onDelete = {
+                        // Deleting a stretch of audio cannot be undone, so the
+                        // button asks first (DESIGN §12.4).
+                        pendingSegment = currentSegment
+                    },
+                )
+            }
 
             // --- the old range cut, kept for the stretches without markers ---
             if (current != null && removed.isNotEmpty()) {

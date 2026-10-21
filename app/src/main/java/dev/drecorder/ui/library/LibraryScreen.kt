@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -209,7 +210,33 @@ fun LibraryScreen(
                     }
                 },
                 actions = {
-                    if (selectionMode) {
+                    // Only the "select" entry point stays in the bar. The three
+                    // selection actions used to live here as well, and on a
+                    // phone the third one (合并) was pushed off the edge — the
+                    // merge existed but could not be found. They are a bottom
+                    // bar now, where they fit and where a thumb reaches them.
+                    if (!selectionMode && recordings.isNotEmpty()) {
+                        TextButton(onClick = { selectionMode = true }) {
+                            Text(stringResource(R.string.library_select))
+                        }
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                ),
+            )
+        },
+        bottomBar = {
+            if (selectionMode) {
+                Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
                         TextButton(
                             onClick = {
                                 selected = if (allSelected) {
@@ -229,16 +256,18 @@ fun LibraryScreen(
                                 ),
                             )
                         }
+                        Spacer(modifier = Modifier.weight(1f))
                         TextButton(
                             onClick = { deleteSelectedVisible = true },
                             enabled = selected.isNotEmpty(),
                         ) {
                             Text(stringResource(R.string.library_delete))
                         }
-                        // Merging is a multi-select action, so it lives in the same
-                        // toolbar the selection already opened — no second entry
-                        // point to discover.
-                        TextButton(
+                        // Merging is a multi-select action, so it lives next to
+                        // delete in the selection bar — no second entry point to
+                        // discover, and it stays disabled until two recordings
+                        // are picked.
+                        Button(
                             onClick = {
                                 val targets = recordings.filter { it.displayName in selected }
                                 if (targets.size < 2) {
@@ -251,16 +280,9 @@ fun LibraryScreen(
                         ) {
                             Text(stringResource(R.string.library_merge))
                         }
-                    } else if (recordings.isNotEmpty()) {
-                        TextButton(onClick = { selectionMode = true }) {
-                            Text(stringResource(R.string.library_select))
-                        }
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
-            )
+                }
+            }
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { innerPadding ->
