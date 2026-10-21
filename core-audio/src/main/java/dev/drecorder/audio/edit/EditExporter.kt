@@ -50,10 +50,17 @@ class EditExporter(private val context: Context) {
     /**
      * Exports [plan] next to its first source.
      *
+     * @param destination the file the result replaces, or `null` to write a new
+     *   recording beside the source. A replacement is written to a temporary
+     *   file first and only renamed over the original once the export has
+     *   succeeded: the transformer is reading from that very file, so writing
+     *   into it directly would truncate the audio it is still decoding, and a
+     *   failed overwrite would leave the user with no recording at all.
      * @param onProgress receives a percentage in 0..100 while the export runs.
      */
     suspend fun export(
         plan: EditPlan,
+        destination: File? = null,
         onProgress: ((Int) -> Unit)? = null,
     ): EditExportResult {
         if (plan.isEmpty) {
@@ -65,7 +72,7 @@ class EditExporter(private val context: Context) {
             return EditExportResult.Failure("源文件已不存在")
         }
 
-        val output = EditOutputNaming.outputFileFor(source)
+        val output = destination ?: EditOutputNaming.outputFileFor(source)
         val temporary = EditOutputNaming.temporaryFileFor(output)
         runCatching { temporary.delete() }
 

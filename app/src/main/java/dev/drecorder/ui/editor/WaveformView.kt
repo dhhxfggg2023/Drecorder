@@ -94,7 +94,7 @@ fun WaveformView(
     playheadColor: Color = Color(0xFFE53935),
     /** The stretch the user has picked, drawn as a highlight under the audio. */
     selectedRange: EditSegment? = null,
-    selectionColor: Color = Color(0x333D7EFF),
+    selectionColor: Color = Color(0x553D7EFF),
 ) {
     val textMeasurer = rememberTextMeasurer()
     var widthPx by remember { mutableIntStateOf(0) }

@@ -132,6 +132,33 @@ data class EditorSource(
 )
 
 /**
+ * Something the user asked for that changes the recording without a way back,
+ * waiting for a yes.
+ *
+ * Every one of these throws audio away: a cut removes it from the plan, "only
+ * this stretch" throws away everything else in the file, and an overwrite
+ * replaces the recording on disk. None of them can be undone from inside the
+ * editor, so none of them happen on the first tap (DESIGN §12.4).
+ *
+ * They share one dialog rather than three, because they share one question —
+ * "this cannot be undone, do you mean it?" — and a dialog per action is how
+ * the two of them drift into asking differently.
+ */
+private sealed interface PendingEdit {
+    /** The user wants this stretch taken out. */
+    data class DeleteSegment(val segment: EditSegment) : PendingEdit
+
+    /** The user wants to throw away everything but this stretch. */
+    data class KeepOnly(val segment: EditSegment) : PendingEdit
+
+    /** The user wants this stretch played twice. */
+    data class Repeat(val segment: EditSegment) : PendingEdit
+
+    /** The user wants the export to replace [name]. */
+    data class Overwrite(val name: String) : PendingEdit
+}
+
+/**
  * The editor.
  *
  * One waveform, one playhead, and the markers the user cut on — the way a
@@ -214,12 +241,16 @@ fun EditorScreen(
      */
     var waveformDragging by remember { mutableStateOf(false) }
     /**
-     * The stretch the user is about to delete, waiting for a confirmation.
+     * The change the user is about to make that cannot be undone.
      *
-     * Deleting a stretch of audio cannot be undone, so the button asks
-     * first: the segment is held here until the user says yes (DESIGN §12.4).
+     * Deleting a stretch, keeping only one, repeating one and overwriting a
+     * recording all throw audio away for good, so each of them is held here
+     * until the user says yes (DESIGN §12.4).
      */
-    var pendingSegment by remember { mutableStateOf<EditSegment?>(null) }
+    var pendingEdit by remember { mutableStateOf<PendingEdit?>(null) }
+
+    /** True while the export dialog asks where the result should go. */
+    var showExportDialog by remember { mutableStateOf(false) }
 
     // The decoder checks this between chunks, so a long waveform generation can
     // be stopped. It is reset for every source that is decoded.
@@ -535,12 +566,23 @@ fun EditorScreen(
         viewportSpanMs + decodeStepMs
     }
 
-    LaunchedEffect(current?.file, decodeStartMs, decodeSpanMs, detailResolution) {
+    LaunchedEffect(current?.file, decodeStartMs, decodeSpanMs, detailResolution, previewPlaying) {
         val source = current ?: return@LaunchedEffect
         // Starting a new window stops the decode of the previous one: a
         // pinch gesture moves the window many times a second, and every one
         // of those windows would otherwise be decoded.
         val cancelled = windowDecodeGate.start()
+        // Nothing is decoded while the preview plays.
+        //
+        // The audio pipeline and this decoder both want a MediaCodec, and the
+        // phone has a handful of them: a window decode that runs during
+        // playback took the codec the audio was about to use, and the sound
+        // stopped after a second or two. Scrolling the coarse waveform — which
+        // is already in memory and needs no codec — is what the user sees
+        // meanwhile, and the fine one comes back the moment playback stops.
+        // Playback is also what makes the window move, so the window this
+        // would decode is out of date before it finishes.
+        if (previewPlaying) return@LaunchedEffect
         if (!needsDetail) {
             if (source.detailPeaks != null) {
                 sources = sources.replaceAt(selectedIndex) { it.copy(detailPeaks = null) }
@@ -601,8 +643,20 @@ fun EditorScreen(
         viewportStartMs,
         viewportSpanMs,
         detailResolution,
+        previewPlaying,
     ) {
         val fine = current?.detailPeaks
+        // While the preview plays, the coarse waveform is the one that is
+        // drawn, even when the fine one is sitting right there.
+        //
+        // The fine waveform belongs to one window, and during playback the
+        // window moves every frame; showing it would mean decoding a new one
+        // every frame, and the decoder would be competing with the audio for
+        // the phone's few codecs. The coarse waveform is in memory, costs
+        // nothing, and its lower resolution is not what the user is looking at
+        // while listening — they are watching the recording slide past the
+        // playhead. The fine one is back as soon as playback stops.
+        if (previewPlaying) return@remember current?.peaks ?: fine
         // The fine waveform has to be *this* window's, and it has to be at
         // least as fine as the window needs.
         //
@@ -631,6 +685,44 @@ fun EditorScreen(
     val segmentHasAudio = current?.let {
         pickedSegment != null && EditMarkers.segmentHasAudio(it.keep, pickedSegment)
     } ?: false
+
+    /**
+     * Writes the plan out, either as a new recording or over [destination].
+     *
+     * An edit used to have exactly one outcome — a new file beside the original
+     * — which meant every trim left the user with two recordings and no way to
+     * say "this is the same recording, edited". The choice is the user's; the
+     * overwrite is the one that needs a confirmation, because the file it
+     * replaces is not recoverable.
+     */
+    fun runExport(destination: File?) {
+        scope.launch {
+            exporting = true
+            exportProgress = 0
+            val result = exporter.export(plan, destination) { percent ->
+                exportProgress = percent
+            }
+            exporting = false
+            when (result) {
+                is EditExportResult.Success -> {
+                    // A derived file is a new recording: it gets its own
+                    // "edited" mark, and its silence is measured again rather
+                    // than inherited (DESIGN §12.3).
+                    derivedMarker.markDerived(result.file.name)
+                    val silent = EditSilence.keptAudioIsSilent(
+                        sources.map { source -> source.keep to source.peaks },
+                    )
+                    silentMarker.write(result.file.name, wasSilent = silent)
+                    notice = context.getString(R.string.editor_exported, result.file.name)
+                    onExported(result.file)
+                }
+
+                is EditExportResult.Failure -> {
+                    notice = result.message
+                }
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -677,36 +769,11 @@ fun EditorScreen(
                     TextButton(
                         enabled = !exporting && plan.keptDurationMs > 0 && formatMismatch == null,
                         onClick = {
-                            scope.launch {
-                                exporting = true
-                                exportProgress = 0
-                                val result = exporter.export(plan) { percent -> exportProgress = percent }
-                                exporting = false
-                                when (result) {
-                                    is EditExportResult.Success -> {
-                                        // A derived file is a new recording: it gets
-                                        // its own "edited" mark, and its silence is
-                                        // measured again rather than inherited
-                                        // (DESIGN §12.3).
-                                        derivedMarker.markDerived(result.file.name)
-                                        val silent = EditSilence.keptAudioIsSilent(
-                                            sources.map { source ->
-                                                source.keep to source.peaks
-                                            },
-                                        )
-                                        silentMarker.write(result.file.name, wasSilent = silent)
-                                        notice = context.getString(
-                                            R.string.editor_exported,
-                                            result.file.name,
-                                        )
-                                        onExported(result.file)
-                                    }
-
-                                    is EditExportResult.Failure -> {
-                                        notice = result.message
-                                    }
-                                }
-                            }
+                            // Where the result goes is a question, not a
+                            // default: a new recording and the same recording
+                            // edited are both legitimate, and only the user
+                            // knows which one this is (m02684).
+                            showExportDialog = true
                         },
                     ) {
                         Text(stringResource(R.string.editor_export))
@@ -919,10 +986,15 @@ fun EditorScreen(
                                     // tap from the waveform is the trap the user
                                     // hit (m01839).
                                     val total = current.durationMs
-                                    selectedSegment = if (current.markers.isEmpty()) {
-                                        null
+                                    if (current.markers.isEmpty()) {
+                                        // A tap that does nothing looks broken.
+                                        // Saying what is missing is the whole
+                                        // difference between "this app ignores
+                                        // me" and "I need two cut points first".
+                                        selectedSegment = null
+                                        notice = context.getString(R.string.editor_select_need_markers)
                                     } else {
-                                        EditMarkers.segmentContaining(
+                                        selectedSegment = EditMarkers.segmentContaining(
                                             markers = current.markers,
                                             timeMs = timeMs,
                                             totalMs = total,
@@ -1174,48 +1246,18 @@ fun EditorScreen(
                     onDelete = {
                         // Deleting a stretch of audio cannot be undone, so the
                         // button asks first (DESIGN §12.4).
-                        pendingSegment = pickedSegment
+                        pendingEdit = PendingEdit.DeleteSegment(pickedSegment)
                     },
                     onKeepOnly = {
-                        sources = sources.replaceAt(selectedIndex) {
-                            val cut = EditPlanner.remove(
-                                keep = it.keep,
-                                fromMs = 0L,
-                                toMs = pickedSegment.startMs,
-                                durationMs = it.durationMs,
-                            )
-                            it.copy(
-                                keep = EditPlanner.remove(
-                                    keep = cut,
-                                    fromMs = pickedSegment.endMs,
-                                    toMs = it.durationMs,
-                                    durationMs = it.durationMs,
-                                ),
-                            )
-                        }
-                        selectedSegment = null
-                        notice = context.getString(R.string.editor_segment_kept)
+                        // Throwing away everything except one stretch is the
+                        // largest cut the editor can make, and it used to
+                        // happen on a single tap. It asks (m02684).
+                        pendingEdit = PendingEdit.KeepOnly(pickedSegment)
                     },
                     onRepeat = {
-                        // Playing the stretch a second time is not something a
-                        // keep list can express — it says which parts of a file
-                        // are kept, in file order, once each. It is expressed
-                        // the way a merge is: the same recording spliced in
-                        // again, right after itself, carrying only the picked
-                        // stretch (DESIGN §12.2).
-                        val at = selectedIndex
-                        val copy = sources[at].copy(
-                            displayName = context.getString(
-                                R.string.editor_repeat_name,
-                                sources[at].displayName,
-                            ),
-                            keep = listOf(KeepRange(pickedSegment.startMs, pickedSegment.endMs)),
-                            markers = emptyList(),
-                        )
-                        sources = sources.toMutableList().apply { add(at + 1, copy) }
-                        selectedIndex = at + 1
-                        selectedSegment = null
-                        playheadMs = 0L
+                        // A repeat cannot be undone either: it adds a source
+                        // that the export then writes out. It asks too.
+                        pendingEdit = PendingEdit.Repeat(pickedSegment)
                     },
                 )
             }
@@ -1279,50 +1321,185 @@ fun EditorScreen(
         }
     }
 
-    // --- the confirmation before a stretch of audio is taken out ---
+    // --- the confirmation before audio is thrown away ---
     //
-    // A cut cannot be undone: the audio is gone from the plan and only the
-    // export is left to undo it. The button therefore asks first, and says
-    // which stretch it is about to remove (DESIGN §12.4).
-    pendingSegment?.let { segment ->
+    // None of these can be undone: a cut removes audio from the plan, "only
+    // this stretch" throws away the rest of the file, a repeat adds a whole
+    // source, and an overwrite replaces the recording on disk. The dialog says
+    // which stretch (or which file) it is about to act on, because "确定" over
+    // a question the user cannot check is how the wrong stretch gets deleted
+    // (DESIGN §12.4).
+    pendingEdit?.let { edit ->
+        val (title, body) = when (edit) {
+            is PendingEdit.DeleteSegment -> stringResource(R.string.editor_delete_confirm_title) to
+                stringResource(
+                    R.string.editor_delete_confirm_body,
+                    formatDuration(edit.segment.startMs),
+                    formatDuration(edit.segment.endMs),
+                    formatDuration(edit.segment.durationMs),
+                )
+
+            is PendingEdit.KeepOnly -> stringResource(R.string.editor_keep_only_confirm_title) to
+                stringResource(
+                    R.string.editor_keep_only_confirm_body,
+                    formatDuration(edit.segment.startMs),
+                    formatDuration(edit.segment.endMs),
+                    formatDuration(edit.segment.durationMs),
+                )
+
+            is PendingEdit.Repeat -> stringResource(R.string.editor_repeat_confirm_title) to
+                stringResource(
+                    R.string.editor_repeat_confirm_body,
+                    formatDuration(edit.segment.startMs),
+                    formatDuration(edit.segment.endMs),
+                    formatDuration(edit.segment.durationMs),
+                )
+
+            is PendingEdit.Overwrite -> stringResource(R.string.editor_overwrite_confirm_title) to
+                stringResource(R.string.editor_overwrite_confirm_body, edit.name)
+        }
         AlertDialog(
-            onDismissRequest = { pendingSegment = null },
-            title = { Text(stringResource(R.string.editor_delete_confirm_title)) },
+            onDismissRequest = { pendingEdit = null },
+            title = { Text(title) },
+            text = { Text(body) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingEdit = null
+                        when (edit) {
+                            is PendingEdit.DeleteSegment -> {
+                                val source = current ?: return@TextButton
+                                val result = EditMarkers.deleteSegment(
+                                    keep = source.keep,
+                                    markers = source.markers,
+                                    segment = edit.segment,
+                                    durationMs = source.durationMs,
+                                )
+                                sources = sources.replaceAt(selectedIndex) {
+                                    it.copy(keep = result.keep, markers = result.markers)
+                                }
+                                selectedMarkerMs = null
+                                selectedSegment = null
+                                notice = context.getString(R.string.editor_segment_deleted)
+                            }
+
+                            is PendingEdit.KeepOnly -> {
+                                sources = sources.replaceAt(selectedIndex) { source ->
+                                    val cut = EditPlanner.remove(
+                                        keep = source.keep,
+                                        fromMs = 0L,
+                                        toMs = edit.segment.startMs,
+                                        durationMs = source.durationMs,
+                                    )
+                                    source.copy(
+                                        keep = EditPlanner.remove(
+                                            keep = cut,
+                                            fromMs = edit.segment.endMs,
+                                            toMs = source.durationMs,
+                                            durationMs = source.durationMs,
+                                        ),
+                                        markers = emptyList(),
+                                    )
+                                }
+                                selectedSegment = null
+                                selectedMarkerMs = null
+                                notice = context.getString(R.string.editor_segment_kept)
+                            }
+
+                            is PendingEdit.Repeat -> {
+                                // Playing the stretch a second time is not
+                                // something a keep list can express — it says
+                                // which parts of a file are kept, in file order,
+                                // once each. It is expressed the way a merge is:
+                                // the same recording spliced in again, right
+                                // after itself, carrying only the picked stretch
+                                // (DESIGN §12.2).
+                                val at = selectedIndex
+                                val copy = sources[at].copy(
+                                    displayName = context.getString(
+                                        R.string.editor_repeat_name,
+                                        sources[at].displayName,
+                                    ),
+                                    keep = listOf(
+                                        KeepRange(edit.segment.startMs, edit.segment.endMs),
+                                    ),
+                                    markers = emptyList(),
+                                )
+                                sources = sources.toMutableList().apply { add(at + 1, copy) }
+                                selectedIndex = at + 1
+                                selectedSegment = null
+                                playheadMs = 0L
+                            }
+
+                            is PendingEdit.Overwrite -> {
+                                runExport(destination = sources.firstOrNull()?.file)
+                            }
+                        }
+                    },
+                ) {
+                    // The button says what it does. "确定" would let the same
+                    // word confirm a delete, an overwrite and a repeat, and the
+                    // one place it is read is the one place a mistake is
+                    // irreversible.
+                    Text(
+                        stringResource(
+                            when (edit) {
+                                is PendingEdit.DeleteSegment -> R.string.editor_segment_delete
+                                is PendingEdit.KeepOnly -> R.string.editor_segment_keep
+                                is PendingEdit.Repeat -> R.string.editor_segment_repeat
+                                is PendingEdit.Overwrite -> R.string.editor_export_overwrite
+                            },
+                        ),
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingEdit = null }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
+    }
+
+    // --- export: a new recording, or the one that is already there ---
+    if (showExportDialog) {
+        val first = sources.firstOrNull()
+        AlertDialog(
+            onDismissRequest = { showExportDialog = false },
+            title = { Text(stringResource(R.string.editor_export_title)) },
             text = {
                 Text(
-                    stringResource(
-                        R.string.editor_delete_confirm_body,
-                        formatDuration(segment.startMs),
-                        formatDuration(segment.endMs),
-                        formatDuration(segment.durationMs),
-                    )
+                    if (sources.size > 1) {
+                        stringResource(
+                            R.string.editor_export_body_overwrite,
+                            first?.displayName ?: "",
+                        )
+                    } else {
+                        stringResource(R.string.editor_export_body_new)
+                    },
                 )
             },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        pendingSegment = null
-                        val source = current ?: return@TextButton
-                        val result = EditMarkers.deleteSegment(
-                            keep = source.keep,
-                            markers = source.markers,
-                            segment = segment,
-                            durationMs = source.durationMs,
-                        )
-                        sources = sources.replaceAt(selectedIndex) {
-                            it.copy(keep = result.keep, markers = result.markers)
-                        }
-                        selectedMarkerMs = null
-                        selectedSegment = null
-                        notice = context.getString(R.string.editor_segment_deleted)
+                        showExportDialog = false
+                        runExport(destination = null)
                     },
                 ) {
-                    Text(stringResource(R.string.common_confirm))
+                    Text(stringResource(R.string.editor_export_save_as))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { pendingSegment = null }) {
-                    Text(stringResource(R.string.common_cancel))
+                TextButton(
+                    onClick = {
+                        showExportDialog = false
+                        val target = first
+                        if (target != null) {
+                            pendingEdit = PendingEdit.Overwrite(target.displayName)
+                        }
+                    },
+                ) {
+                    Text(stringResource(R.string.editor_export_overwrite))
                 }
             },
         )
