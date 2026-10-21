@@ -1,15 +1,15 @@
-{
-    "versionCode":  7,
-    "versionName":  "0.2.4",
+﻿{
+    "versionCode":  8,
+    "versionName":  "0.2.5",
     "minSupportedVersionCode":  1,
-    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.2.4/drecorder-0.2.4.apk",
+    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.2.5/drecorder-0.2.5.apk",
     "mirrors":  [
 
                 ],
     "sizeBytes":  53015540,
-    "sha256":  "78539144a98ff197e1ed07bec4b3c854f3ac97ac397d375e6e2949235c65fe37",
+    "sha256":  "db4e7eb0f6140296a1ad68a029f59b7d23e8d6b8a4bfabb8cf48450bb6558f04",
     "signingCertSha256":  "4f070db7fd59b883e7ab771f88cda4bc80ce3b97e1defcf9e7faeab5a496a348",
-    "publishedAt":  "2026-10-21T10:10:00Z",
-    "releaseNotes":  "编辑器三处调整：播放头固定在屏幕正中不动，波形在它下面走；去掉横屏/全屏编辑，编辑页锁定竖屏；删除两个切点之间的片段前会先弹确认框。",
+    "publishedAt":  "2026-10-21T11:36:14Z",
+    "releaseNotes":  "编辑器修复：播放头固定在屏幕正中，波形在它下面滚动；修复打点手势——拖一下不再打出一百多个切点；点播放从红色光标处开始，且播放动画平滑不卡顿。",
     "force":  false
 }
