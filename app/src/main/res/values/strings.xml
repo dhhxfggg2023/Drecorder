@@ -164,11 +164,22 @@
     <string name="editor_snap_on">吸附到静音：开</string>
     <string name="editor_snap_off">吸附到静音：关</string>
     <string name="editor_format_mismatch">格式不一致，无法合并：%1$s</string>
-    <string name="editor_selection_start">起点 (ms)</string>
-    <string name="editor_selection_end">终点 (ms)</string>
-    <string name="editor_selection_length">长度 %1$s</string>
-    <string name="editor_selection_duration">长度 (ms)</string>
-    <string name="editor_overview">总览</string>
+    <string name="editor_markers">切点 %1$d</string>
+    <string name="editor_markers_empty">还没有切点。点「加切点」在播放头处打一个，播放时波形会自动跟着走。</string>
+    <string name="editor_marker_add">加切点</string>
+    <string name="editor_marker_deleted">已删除切点</string>
+    <string name="editor_marker_delete">删除切点 %1$s</string>
+    <string name="editor_delete_segment">删除 %1$s – %2$s（%3$s）</string>
+    <string name="editor_delete_segment_none">删除两个切点之间的片段</string>
+    <string name="editor_rotate">转向</string>
+    <string name="editor_rotate_landscape">横屏</string>
+    <string name="editor_rotate_portrait">竖屏</string>
+    <string name="editor_zoom_in">放大</string>
+    <string name="editor_zoom_out">缩小</string>
+    <string name="editor_zoom_fit">全览</string>
+    <string name="editor_span">窗口 %1$s</string>
+    <string name="editor_removed_summary">已删掉 %1$s</string>
+    <string name="editor_playhead_jump">跳到播放头</string>
 
     <string name="update_title">检查更新</string>
     <string name="update_check">检查更新</string>

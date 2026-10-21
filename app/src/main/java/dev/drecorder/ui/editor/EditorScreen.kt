@@ -1,5 +1,7 @@
 package dev.drecorder.ui.editor
 
+import android.content.pm.ActivityInfo
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -9,16 +11,22 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.ZoomIn
+import androidx.compose.material.icons.filled.ZoomOut
+import androidx.compose.material.icons.filled.ZoomOutMap
+import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -53,8 +61,11 @@ import dev.drecorder.audio.edit.EditComposition
 import dev.drecorder.audio.edit.EditExportResult
 import dev.drecorder.audio.edit.EditExporter
 import dev.drecorder.audio.edit.EditFormats
-import dev.drecorder.audio.edit.EditOverview
+import dev.drecorder.audio.edit.EditFollow
+import dev.drecorder.audio.edit.EditMarkerPlan
+import dev.drecorder.audio.edit.EditMarkers
 import dev.drecorder.audio.edit.EditPlan
+import dev.drecorder.audio.edit.EditSegment
 import dev.drecorder.audio.edit.EditPlanner
 import dev.drecorder.audio.edit.EditSilence
 import dev.drecorder.audio.edit.EditSnapping
@@ -84,7 +95,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * One recording being edited.
  *
  * The waveform and the keep list travel together: the waveform is what the user
- * looks at, the keep list is what the exporter is given.
+ * looks at, the keep list is what the exporter is given. The markers are the
+ * user's cut points and live in the same place (DESIGN §12.4).
  */
 data class EditorSource(
     val file: File,
@@ -93,18 +105,26 @@ data class EditorSource(
     /**
      * The whole recording's waveform, at the coarse resolution.
      *
-     * It is what the overview strip draws and what the detail view falls back
-     * to when the visible window does not need anything finer.
+     * It covers the whole file, so it is always something to draw, and it is
+     * what the timeline falls back to while the finer waveform of the visible
+     * window is being decoded.
      */
     val peaks: PeakData? = null,
     /**
      * The visible window's waveform, at a finer resolution.
      *
-     * `null` means the coarse waveform is good enough — the detail view then
+     * `null` means the coarse waveform is good enough — the timeline then
      * draws the coarse one and nothing is decoded.
      */
     val detailPeaks: PeakData? = null,
     val keep: List<KeepRange> = emptyList(),
+    /**
+     * The cut points, in source time.
+     *
+     * A marker is at once a bookmark and a cut point: the stretch between two
+     * markers is a segment that can be taken out (DESIGN §12.4).
+     */
+    val markers: List<Long> = emptyList(),
     val loading: Boolean = false,
     /** How far the waveform generation has got, 0..100; -1 when not known. */
     val loadProgress: Int = -1,
@@ -114,10 +134,10 @@ data class EditorSource(
 /**
  * The editor.
  *
- * The whole model is "a list of ranges to keep" per source (DESIGN §12.2), and
- * every gesture ends up calling [EditPlanner]. The screen itself only draws and
- * forwards intent, which is why the interesting logic can be unit-tested on the
- * JVM.
+ * One waveform, one playhead, and the markers the user cut on — the way a
+ * video editor works (DESIGN §12.4). The screen itself only draws and
+ * forwards intent, which is why the interesting logic lives in core-audio and
+ * can be unit-tested on the JVM.
  *
  * One source is a trim; several sources are a merge. The difference is only in
  * how many sources the plan holds — the same waveform, the same gestures, the
@@ -132,10 +152,10 @@ fun EditorScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val activity = LocalActivity.current
 
     var sources by remember { mutableStateOf<List<EditorSource>>(emptyList()) }
     var selectedIndex by remember { mutableStateOf(0) }
-    var selection by remember { mutableStateOf<TimeSelection?>(null) }
     var snapEnabled by remember { mutableStateOf(true) }
     var notice by remember { mutableStateOf<String?>(null) }
     // Non-null when the sources cannot be spliced without re-encoding. The merge is
@@ -146,6 +166,27 @@ fun EditorScreen(
     var previewPlaying by remember { mutableStateOf(false) }
     var previewPositionMs by remember { mutableStateOf(0L) }
     var previewDurationMs by remember { mutableStateOf(0L) }
+
+    /**
+     * The playhead, in the **source** time of the recording on screen.
+     *
+     * The playhead is kept in source time rather than in the time of the
+     * merged stream, because the waveform it sits on is a source's own
+     * timeline (DESIGN §12.4).
+     */
+    var playheadMs by remember { mutableStateOf(0L) }
+    /** The marker the user picked, if any. */
+    var selectedMarkerMs by remember { mutableStateOf<Long?>(null) }
+    /**
+     * Whether a finger is on the waveform right now.
+     *
+     * While it is, the window belongs to the finger and not to the playhead:
+     * the two would otherwise fight over the same screen, and the waveform
+     * would jump back under the finger every 100 ms.
+     */
+    var waveformDragging by remember { mutableStateOf(false) }
+    /** Whether the editor is in landscape; the button in the bar turns it. */
+    var landscape by remember { mutableStateOf(false) }
 
     // The decoder checks this between chunks, so a long waveform generation can
     // be stopped. It is reset for every source that is decoded.
@@ -161,7 +202,7 @@ fun EditorScreen(
     // them busy with a window nobody looks at any more.
     val windowDecodeGate = remember { PeakDecodeGate() }
 
-    // The viewport is shared by all sources so that a zoom level means the same
+    // The window is shared by all sources so that a zoom level means the same
     // thing wherever the user looks.
     var viewportStartMs by remember { mutableStateOf(0L) }
     var viewportSpanMs by remember { mutableStateOf(0L) }
@@ -183,16 +224,11 @@ fun EditorScreen(
             )
         }
         sources = initial
-        // The detail view opens on a short window rather than on the whole
-        // recording: thirty seconds is what a waveform can actually show, and
-        // the overview strip above it carries the map of the rest
-        // (DESIGN §12.4).
-        //
-        // The window is fitted to the source that is on screen — the first
-        // one, which is the one that is selected when the editor opens.
-        val opening = EditOverview.initialViewport(initial.first().durationMs)
-        viewportSpanMs = opening.spanMs
-        viewportStartMs = opening.startMs
+        // The timeline opens on a span that shows a phrase rather than a
+        // hairline, and the user zooms out from there (DESIGN §12.4).
+        val opening = EditMarkerPlan.initialSpanMs(initial.first().durationMs)
+        viewportSpanMs = opening
+        viewportStartMs = 0L
 
         // Transmuxing cannot convert one encoding into another, so a merge of
         // mismatched recordings is refused here, by name, rather than silently
@@ -241,7 +277,7 @@ fun EditorScreen(
                     },
                     // A long recording is decoded in segments, and the
                     // waveform of the part that is already done is handed
-                    // over after every segment: the overview fills in while
+                    // over after every segment: the timeline fills in while
                     // the rest is still being decoded.
                     onPartial = { partial ->
                         scope.launch {
@@ -281,11 +317,39 @@ fun EditorScreen(
     }
 
     // --- preview ---------------------------------------------------------------
+    val plan = remember(sources) {
+        EditPlan(
+            sources.map { source ->
+                SourceSpan(
+                    file = source.file,
+                    durationMs = source.durationMs,
+                    keep = source.keep,
+                )
+            },
+        )
+    }
+
+    /**
+     * Moves the playhead of the merged preview to a moment of the source on
+     * screen.
+     *
+     * A moment that was cut away has no position in the merged stream, so the
+     * nearest moment that still exists is used: the user meant the audio
+     * around there, not silence (DESIGN §12.4).
+     */
+    fun seekToSourceMs(sourceIndex: Int, sourceTimeMs: Long) {
+        val output = EditTimeline.nearestOutputMsForSourceTime(plan, sourceIndex, sourceTimeMs)
+        if (output != null) {
+            previewPlayer.seekTo(output)
+            previewPositionMs = output
+        }
+    }
+
     LaunchedEffect(previewPlaying) {
         while (previewPlaying) {
             previewPositionMs = previewPlayer.positionMs
             previewDurationMs = previewPlayer.durationMs
-            delay(200)
+            delay(POLL_INTERVAL_MS)
         }
     }
 
@@ -305,18 +369,62 @@ fun EditorScreen(
     DisposableEffect(Unit) {
         onDispose {
             previewPlayer.release()
+            // The editor turns the screen itself; it must not leave the app
+            // sideways when the user walks away from it.
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         }
     }
 
     val current = sources.getOrNull(selectedIndex)
 
-    // --- the detail window's finer waveform ------------------------------------
+    /**
+     * The source that is sounding right now.
+     *
+     * While the merged preview plays, the timeline follows the audio: the
+     * recording that is playing is the one on screen, so the user watches the
+     * waveform of the part they are hearing (DESIGN §12.4).
+     */
+    val playingIndex = remember(previewPositionMs, plan) {
+        plan.sources.indices.firstOrNull { index ->
+            EditTimeline.sourceTimeForOutputMs(plan, index, previewPositionMs) != null
+        }
+    }
+
+    // While something plays, the playhead and the window follow it.
     //
-    // The coarse waveform covers the whole recording and is enough for the
-    // overview. The detail view wants more resolution than the coarse one can
-    // carry, and decoding the whole file again for that would take minutes.
-    // Instead only the visible window is decoded — a few seconds of audio,
-    // which takes milliseconds (DESIGN §12.4).
+    // `waveformDragging` is part of the key on purpose: the effect reads it
+    // when it runs, and it has to run again when the finger is lifted, or
+    // the window would stay wherever the drag left it.
+    LaunchedEffect(previewPlaying, previewPositionMs, plan, waveformDragging) {
+        if (!previewPlaying) return@LaunchedEffect
+        val index = playingIndex ?: return@LaunchedEffect
+        val sourceTime = EditTimeline.sourceTimeForOutputMs(plan, index, previewPositionMs)
+            ?: return@LaunchedEffect
+        playheadMs = sourceTime
+        if (index != selectedIndex) {
+            selectedIndex = index
+            selectedMarkerMs = null
+        }
+        // The window scrolls so that the playhead stays where it is on the
+        // screen and the waveform moves under it.
+        val total = sources.getOrNull(index)?.durationMs ?: return@LaunchedEffect
+        val next = EditFollow.follow(
+            current = EditViewport(viewportStartMs, viewportSpanMs),
+            playheadMs = sourceTime,
+            totalMs = total,
+            // A finger on the waveform owns the window while it is down.
+            follow = !waveformDragging,
+        )
+        viewportStartMs = next.startMs
+    }
+
+    // --- the visible window's finer waveform ------------------------------------
+    //
+    // The coarse waveform covers the whole recording and is enough to draw
+    // the timeline from. The window wants more resolution than the coarse one
+    // can carry, and decoding the whole file again for that would take
+    // minutes. Instead only the visible window is decoded — a few seconds of
+    // audio, which takes milliseconds (DESIGN §12.4).
     //
     // The resolution needed is decided by the window and the screen width, and
     // it is one of a fixed ladder, so the same window always asks for the same
@@ -379,22 +487,11 @@ fun EditorScreen(
         }
     }
 
-    val plan = remember(sources) {
-        EditPlan(
-            sources.map { source ->
-                SourceSpan(
-                    file = source.file,
-                    durationMs = source.durationMs,
-                    keep = source.keep,
-                )
-            },
-        )
-    }
     val removed = current?.let {
         EditPlanner.complement(it.keep, it.durationMs)
     } ?: emptyList()
 
-    // The waveform the detail view draws: the fine one when it belongs to the
+    // The waveform the timeline draws: the fine one when it belongs to the
     // window that is on screen, the coarse one otherwise. A fine waveform of
     // an earlier window would show the wrong part of the recording.
     val visiblePeaks = remember(
@@ -420,16 +517,21 @@ fun EditorScreen(
         if (coversWindow) fine else current?.peaks
     }
 
-    // The source the preview is currently playing, so the playhead can sit on
-    // the recording that is actually sounding.
-    val playingIndex = remember(previewPositionMs, plan) {
-        plan.sources.indices.firstOrNull { index ->
-            EditTimeline.sourceTimeForOutputMs(plan, index, previewPositionMs) != null
+    // The segment the "delete" button is about: the one that starts at the
+    // marker the user picked, or the one the playhead is in.
+    val currentSegment = remember(current?.markers, selectedMarkerMs, playheadMs, current?.durationMs) {
+        val markers = current?.markers.orEmpty()
+        val total = current?.durationMs ?: 0L
+        val picked = selectedMarkerMs
+        if (picked != null) {
+            val end = EditMarkers.next(markers, picked) ?: total
+            EditSegment(picked, maxOf(picked, end))        } else {
+            EditMarkers.segmentContaining(markers, playheadMs, total)
         }
     }
-    val playheadMs = playingIndex?.let { index ->
-        EditTimeline.sourceTimeForOutputMs(plan, index, previewPositionMs)
-    }
+    val segmentHasAudio = current?.let {
+        EditMarkers.segmentHasAudio(it.keep, currentSegment)
+    } ?: false
 
     Scaffold(
         topBar = {
@@ -463,6 +565,38 @@ fun EditorScreen(
                     }
                 },
                 actions = {
+                    // The editor turns the screen itself rather than following
+                    // the system: the timeline wants to be wide, and the user
+                    // decides when (DESIGN §12.4).
+                    IconButton(
+                        onClick = {
+                            val next = !landscape
+                            landscape = next
+                            activity?.requestedOrientation = if (next) {
+                                ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                            } else {
+                                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                            }
+                        },
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.ScreenRotation,
+                            contentDescription = stringResource(R.string.editor_rotate),
+                        )
+                    }
+                    IconButton(
+                        onClick = {
+                            val total = current?.durationMs ?: 0L
+                            viewportSpanMs = EditMarkerPlan.fitSpanMs(total)
+                            viewportStartMs = 0L
+                        },
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.ZoomOutMap,
+                            contentDescription = stringResource(R.string.editor_zoom_fit),
+                        )
+                    }
+
                     TextButton(
                         enabled = !exporting && plan.keptDurationMs > 0 && formatMismatch == null,
                         onClick = {
@@ -530,12 +664,12 @@ fun EditorScreen(
                             selected = index == selectedIndex,
                             onClick = {
                                 selectedIndex = index
-                                selection = null
+                                selectedMarkerMs = null
                                 // The window is shared by all the sources, but
                                 // one source may be shorter than the window
                                 // that is on screen: the window is pulled back
                                 // onto the recording that was just chosen,
-                                // otherwise the detail view would show a
+                                // otherwise the timeline would show a
                                 // stretch of audio that does not exist.
                                 val total = sources.getOrNull(index)?.durationMs
                                     ?.coerceAtLeast(1L) ?: return@FilterChip
@@ -545,6 +679,7 @@ fun EditorScreen(
                                 )
                                 viewportSpanMs = span
                                 viewportStartMs = viewportStartMs.coerceIn(0L, total - span)
+                                playheadMs = playheadMs.coerceIn(0L, total)
                             },
                             label = {
                                 Text(
@@ -558,23 +693,7 @@ fun EditorScreen(
                 }
             }
 
-            // --- the overview strip: the whole recording, with the viewport ---
-            OverviewStrip(
-                peaks = current?.peaks,
-                totalMs = current?.durationMs ?: 0L,
-                viewportStartMs = viewportStartMs,
-                viewportSpanMs = viewportSpanMs,
-                onViewportMove = { start, span ->
-                    viewportStartMs = start
-                    viewportSpanMs = span
-                },
-                overviewLabel = stringResource(R.string.editor_overview),
-                modifier = Modifier.fillMaxWidth(),
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            // --- the waveform ---
+            // --- the waveform: one track, with the playhead and the markers ---
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = MaterialTheme.shapes.medium,
@@ -583,7 +702,7 @@ fun EditorScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(190.dp),
+                        .height(if (landscape) 260.dp else 220.dp),
                 ) {
                     when {
                         current == null -> Unit
@@ -592,8 +711,7 @@ fun EditorScreen(
                         // is still being decoded. A spinner that covers the
                         // whole view is what made a long recording look
                         // broken: the detail waveform is ready in milliseconds
-                        // and the coarse one takes minutes, and neither of
-                        // them should hide the other.
+                        // and the coarse one takes minutes.
                         visiblePeaks != null -> Box {
                             WaveformView(
                                 // The finer waveform of the visible window
@@ -605,10 +723,40 @@ fun EditorScreen(
                                 startMs = viewportStartMs,
                                 spanMs = viewportSpanMs,
                                 removed = removed,
-                                selection = selection,
+                                markers = current.markers,
                                 playheadMs = playheadMs,
-                                onSelectionChange = { selection = it },
-                                onSelectionCommit = { selection = it },
+                                onScrub = { ms ->
+                                    playheadMs = ms
+                                    seekToSourceMs(selectedIndex, ms)
+                                },
+                                onTimelineDrag = { grabbedMs, targetMs ->
+                                    // The waveform follows the finger, and
+                                    // the playhead follows the waveform: the
+                                    // moment the user grabbed is the moment
+                                    // that is now playing.
+                                    val total = current.durationMs
+                                    val next = EditFollow.dragged(
+                                        current = EditViewport(viewportStartMs, viewportSpanMs),
+                                        grabbedMs = grabbedMs,
+                                        targetMs = targetMs,
+                                        totalMs = total,
+                                    )
+                                    viewportStartMs = next.startMs
+                                    playheadMs = grabbedMs
+                                    seekToSourceMs(selectedIndex, grabbedMs)
+                                },
+                                onMarkerDrag = { fromMs, toMs ->
+                                    sources = sources.replaceAt(selectedIndex) {
+                                        it.copy(
+                                            markers = EditMarkers.move(
+                                                markers = it.markers,
+                                                fromMs = fromMs,
+                                                toMs = toMs,
+                                                totalMs = it.durationMs,
+                                            ),
+                                        )
+                                    }
+                                },
                                 onViewportGesture = { zoom, panFraction, focusFraction ->
                                     // The maths lives in core-audio so it can be
                                     // unit-tested: a window that leaves the recording
@@ -623,6 +771,9 @@ fun EditorScreen(
                                     )
                                     viewportStartMs = next.startMs
                                     viewportSpanMs = next.spanMs
+                                },
+                                onDraggingChanged = { dragging ->
+                                    waveformDragging = dragging
                                 },
                                 modifier = Modifier.fillMaxWidth(),
                             )
@@ -680,78 +831,66 @@ fun EditorScreen(
                 }
             }
 
-            // --- the exact numbers of the selection ---
-            SelectionPanel(
-                selection = selection,
-                totalMs = current?.durationMs ?: 0L,
-                onSelectionChange = { selection = it },
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // --- the selection actions ---
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                val pending = selection
-                val overlapsRemoved = pending != null && removed.any { range ->
-                    pending.startMs < range.endMs && range.startMs < pending.endMs
-                }
-                Button(
-                    enabled = pending != null && pending.durationMs > 0 && !overlapsRemoved,
-                    onClick = {
-                        val target = pending ?: return@Button
-                        val snapped = EditSnapping.snapRange(
-                            current?.peaks,
-                            KeepRange(target.startMs, target.endMs),
-                            enabled = snapEnabled,
-                        )
-                        val updated = EditPlanner.remove(
-                            keep = current?.keep.orEmpty(),
-                            fromMs = snapped.startMs,
-                            toMs = snapped.endMs,
-                            durationMs = current?.durationMs ?: 0L,
-                        )
-                        sources = sources.replaceAt(selectedIndex) { it.copy(keep = updated) }
-                        selection = null
-                    },
-                ) {
-                    Icon(
-                        Icons.Filled.ContentCut,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(stringResource(R.string.editor_delete_range))
-                }
-
-                Button(
-                    enabled = pending != null && pending.durationMs > 0 && overlapsRemoved,
-                    onClick = {
-                        val target = pending ?: return@Button
-                        val restored = EditPlanner.normalize(
-                            keep = current?.keep.orEmpty() +
-                                KeepRange(target.startMs, target.endMs),
-                            durationMs = current?.durationMs ?: 0L,
-                        )
-                        sources = sources.replaceAt(selectedIndex) { it.copy(keep = restored) }
-                        selection = null
-                    },
-                ) {
-                    Icon(
-                        Icons.Filled.Restore,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(stringResource(R.string.editor_restore_range))
-                }
-            }
-
             Spacer(modifier = Modifier.height(8.dp))
 
+            // --- the zoom: the window onto the recording ---
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                IconButton(
+                    onClick = {
+                        val total = current?.durationMs ?: 0L
+                        val next = EditMarkerPlan.nextSpanMs(
+                            current = viewportSpanMs,
+                            zoomIn = true,
+                            totalMs = total,
+                        )
+                        viewportSpanMs = next
+                        viewportStartMs = viewportStartMs.coerceIn(
+                            0L,
+                            (total - next).coerceAtLeast(0L),
+                        )
+                    },
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.ZoomIn,
+                        contentDescription = stringResource(R.string.editor_zoom_in),
+                    )
+                }
+                IconButton(
+                    onClick = {
+                        val total = current?.durationMs ?: 0L
+                        val next = EditMarkerPlan.nextSpanMs(
+                            current = viewportSpanMs,
+                            zoomIn = false,
+                            totalMs = total,
+                        )
+                        viewportSpanMs = next
+                        viewportStartMs = viewportStartMs.coerceIn(
+                            0L,
+                            (total - next).coerceAtLeast(0L),
+                        )
+                    },
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.ZoomOut,
+                        contentDescription = stringResource(R.string.editor_zoom_out),
+                    )
+                }
+                Text(
+                    text = stringResource(
+                        R.string.editor_span,
+                        formatDuration(viewportSpanMs),
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.weight(1f))
+            }
+
+            // --- the transport: play, and where the playhead is ---
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -779,6 +918,7 @@ fun EditorScreen(
                             }
                         }
                     },
+                    modifier = Modifier.size(56.dp),
                 ) {
                     Icon(
                         imageVector = if (previewPlaying) {
@@ -787,16 +927,17 @@ fun EditorScreen(
                             Icons.Filled.PlayArrow
                         },
                         contentDescription = stringResource(R.string.editor_preview),
+                        modifier = Modifier.size(36.dp),
                     )
                 }
 
                 Text(
                     text = stringResource(
                         R.string.editor_position,
-                        formatDuration(previewPositionMs),
-                        formatDuration(previewDurationMs),
+                        formatDuration(playheadMs),
+                        formatDuration(current?.durationMs ?: 0L),
                     ),
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyLarge,
                 )
 
                 Spacer(modifier = Modifier.weight(1f))
@@ -815,6 +956,107 @@ fun EditorScreen(
                         } else {
                             FontWeight.Normal
                         },
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // --- the markers: the cut points ---
+            MarkerBar(
+                markers = current?.markers.orEmpty(),
+                durationMs = current?.durationMs ?: 0L,
+                selectedMarkerMs = selectedMarkerMs,
+                onSelect = { ms ->
+                    selectedMarkerMs = ms
+                    // A marker is a place to jump to.
+                    playheadMs = ms
+                    seekToSourceMs(selectedIndex, ms)
+                    val total = current?.durationMs ?: 0L
+                    val next = EditFollow.centered(
+                        current = EditViewport(viewportStartMs, viewportSpanMs),
+                        targetMs = ms,
+                        totalMs = total,
+                    )
+                    viewportStartMs = next.startMs
+                },
+                onAddAtPlayhead = {
+                    val source = current ?: return@MarkerBar
+                    val raw = playheadMs
+                    // A cut is nudged to the nearest pause: cutting in the
+                    // middle of a word is the most common way to make an edit
+                    // sound wrong (DESIGN §12.4).
+                    val snapped = EditSnapping.snapTime(
+                        peaks = source.peaks,
+                        timeMs = raw,
+                        enabled = snapEnabled,
+                    )
+                    sources = sources.replaceAt(selectedIndex) {
+                        it.copy(
+                            markers = EditMarkers.insert(
+                                markers = it.markers,
+                                atMs = snapped,
+                                totalMs = it.durationMs,
+                            ),
+                        )
+                    }
+                    selectedMarkerMs = snapped
+                },
+                onDelete = { ms ->
+                    sources = sources.replaceAt(selectedIndex) {
+                        it.copy(
+                            markers = EditMarkers.removeAt(
+                                markers = it.markers,
+                                atMs = ms,
+                            ),
+                        )
+                    }
+                    if (selectedMarkerMs == ms) selectedMarkerMs = null
+                },
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // --- the cut: take the stretch between two markers out ---
+            SegmentDeleteRow(
+                segment = currentSegment,
+                enabled = segmentHasAudio,
+                onDelete = {
+                    val source = current ?: return@SegmentDeleteRow
+                    val result = EditMarkers.deleteSegment(
+                        keep = source.keep,
+                        markers = source.markers,
+                        segment = currentSegment,
+                        durationMs = source.durationMs,
+                    )
+                    sources = sources.replaceAt(selectedIndex) {
+                        it.copy(keep = result.keep, markers = result.markers)
+                    }
+                    selectedMarkerMs = null
+                },
+            )
+
+            // --- the old range cut, kept for the stretches without markers ---
+            if (current != null && removed.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Restore,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = stringResource(
+                            R.string.editor_removed_summary,
+                            removed.sumOf { it.durationMs }.let { formatDuration(it) },
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -886,3 +1128,11 @@ private const val DETAIL_WIDTH_PX = 1_080
  * the detail view never shows the fine waveform at all.
  */
 private const val FRAME_TOLERANCE_MS = 50L
+
+/**
+ * How often the playhead is read while the preview plays, in ms.
+ *
+ * A tenth of a second is fast enough for the playhead to look smooth and
+ * slow enough to leave the phone's battery alone.
+ */
+private const val POLL_INTERVAL_MS = 100L

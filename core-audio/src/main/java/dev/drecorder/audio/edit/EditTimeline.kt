@@ -61,4 +61,37 @@ object EditTimeline {
         }
         return null
     }
+
+    /**
+     * The position in the exported stream of the moment in [sourceIndex]'s
+     * original timeline that is **closest** to [sourceTimeMs].
+     *
+     * A moment that was cut away has no position of its own, but the user may
+     * well drag the playhead over a stretch that was deleted; the nearest
+     * moment that still exists is what they meant (DESIGN §12.4).
+     */
+    fun nearestOutputMsForSourceTime(
+        plan: EditPlan,
+        sourceIndex: Int,
+        sourceTimeMs: Long,
+    ): Long? {
+        val source = plan.sources.getOrNull(sourceIndex) ?: return null
+        if (source.keep.isEmpty()) return null
+        var nearestSourceMs: Long? = null
+        var nearestDistance = Long.MAX_VALUE
+        for (range in source.keep) {
+            // The two edges of a kept stretch are the moments that still
+            // exist; the interior is the whole stretch, whose first moment is
+            // the one to aim for.
+            for (candidate in longArrayOf(range.startMs, range.endMs - 1)) {
+                val distance = kotlin.math.abs(candidate - sourceTimeMs)
+                if (distance < nearestDistance) {
+                    nearestDistance = distance
+                    nearestSourceMs = candidate
+                }
+            }
+        }
+        val moment = nearestSourceMs ?: return null
+        return outputMsForSourceTime(plan, sourceIndex, moment)
+    }
 }
