@@ -1,15 +1,15 @@
-﻿{
-    "versionCode":  5,
-    "versionName":  "0.2.2",
+{
+    "versionCode":  6,
+    "versionName":  "0.2.3",
     "minSupportedVersionCode":  1,
-    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.2.2/drecorder-0.2.2.apk",
+    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.2.3/drecorder-0.2.3.apk",
     "mirrors":  [
 
                 ],
-    "sizeBytes":  53011268,
-    "sha256":  "f40f7dd620623347bd2a811a4a1c7cfaa9ada5b9acd09004856ceeb87a3c8963",
+    "sizeBytes":  53015856,
+    "sha256":  "84650498463931264f88c1cff6567c620dc748b41fe100f685e3267415859c30",
     "signingCertSha256":  "4f070db7fd59b883e7ab771f88cda4bc80ce3b97e1defcf9e7faeab5a496a348",
-    "publishedAt":  "2026-10-21T03:43:01Z",
-    "releaseNotes":  "波形渐进加载：顶部概览条 + 30 秒详情窗口，长录音按 2 分钟分段解码；选区可用波形手柄或数值面板精确调整；修复更新下载不显示进度、首次授权安装后卡死。",
+    "publishedAt":  "2026-10-21T07:01:16Z",
+    "releaseNotes":  "编辑器改成剪辑软件式的单条时间线：点播放，播放头从左往右走，波形自动横向滚动；播放中也能拖波形，拖到哪播放头就跟到哪；波形上打的标记同时是定位书签和切点，可以删掉两个标记之间的片段，删完后面自动无缝接上。竖屏横屏都支持，界面元素加大。",
     "force":  false
 }
