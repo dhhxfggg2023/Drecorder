@@ -1,17 +1,17 @@
 ﻿{
-    "versionCode":  13,
-    "versionName":  "0.3.3",
+    "versionCode":  14,
+    "versionName":  "0.3.4",
     "minSupportedVersionCode":  1,
-    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.3/drecorder-0.3.3.apk",
+    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.4/drecorder-0.3.4.apk",
     "mirrors":  [
-                    "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.3/drecorder-0.3.3.apk",
-                    "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.3/drecorder-0.3.3.apk",
-                    "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.3/drecorder-0.3.3.apk"
+                    "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.4/drecorder-0.3.4.apk",
+                    "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.4/drecorder-0.3.4.apk",
+                    "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.4/drecorder-0.3.4.apk"
                 ],
-    "sizeBytes":  53035256,
-    "sha256":  "f1b7e2de4f361560cceb54164f52de02a9625bd6110a50bba5ca03459bba94ba",
+    "sizeBytes":  53052136,
+    "sha256":  "bfc67171c3858d81cd637e81b89d8ace54bb5dcd6d7ff289df96a35543124ffb",
     "signingCertSha256":  "4f070db7fd59b883e7ab771f88cda4bc80ce3b97e1defcf9e7faeab5a496a348",
-    "publishedAt":  "2026-10-22T08:18:54Z",
-    "releaseNotes":  "编辑页重做：整屏布局按剪辑软件重排（顶栏工具、波形占满、底部播放条）；拖动波形跟手，不再卡住；再次点击已选区间取消选中；下方的列表只列出被合并的录音，没有合并时不显示；库页选择模式恢复「合并」入口；试听失败会显示具体原因",
+    "publishedAt":  "2026-10-22T11:58:20Z",
+    "releaseNotes":  "编辑页：试听失败会显示播放器给出的原因（错误码 + 具体原因）；8 秒没有声音会提示播放器状态与总时长。",
     "force":  false
 }
