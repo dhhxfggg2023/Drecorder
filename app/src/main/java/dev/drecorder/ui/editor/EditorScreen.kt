@@ -54,7 +54,6 @@ import dev.drecorder.R
 import dev.drecorder.audio.edit.AudioFormatProbe
 import dev.drecorder.audio.edit.AudioFormatSpec
 import dev.drecorder.audio.edit.EditClip
-import dev.drecorder.audio.edit.EditComposition
 import dev.drecorder.audio.edit.EditExportResult
 import dev.drecorder.audio.edit.EditExporter
 import dev.drecorder.audio.edit.EditFollow
@@ -70,7 +69,7 @@ import dev.drecorder.audio.edit.PeaksCache
 import dev.drecorder.audio.edit.TrackPeaks
 import dev.drecorder.data.Recording
 import dev.drecorder.data.formatDuration
-import dev.drecorder.playback.CompositionPreviewPlayer
+import dev.drecorder.playback.EditPreviewPlayer
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
@@ -171,7 +170,7 @@ fun EditorScreen(
     var insertCandidates by remember { mutableStateOf<List<Recording>?>(null) }
 
     val decodeCancelled = remember { AtomicBoolean(false) }
-    val previewPlayer = remember { CompositionPreviewPlayer(context) }
+    val previewPlayer = remember { EditPreviewPlayer(context) }
     val exporter = remember { EditExporter(context) }
 
     val totalMs = EditTrack.totalMs(clips)
@@ -298,7 +297,7 @@ fun EditorScreen(
         val length = EditTrack.totalMs(clips)
         val span = EditMarkerPlan.initialSpanMs(length)
         viewportSpanMs = span
-        viewportStartMs = EditFollow.pinned(0L, span, length).startMs
+        viewportStartMs = 0L
         recordings.forEach { recording -> launch { ensureWaveform(recording) } }
     }
 
@@ -366,11 +365,33 @@ fun EditorScreen(
         playheadMs = from
         startedAtMs = from
         buffering = true
-        val started = previewPlayer.play(EditComposition.build(plan), fromMs = from)
+        // A playlist of clipped media items, on the same player the library
+        // uses. The composition the exporter needs is not on this path any
+        // more: a composition exists to be muxed into one file, and asking its
+        // player for the sound of an edit is what answered with silence for
+        // three releases (m00678).
+        val started = previewPlayer.play(clips, fromMs = from)
         previewPlaying = started
         if (!started) {
+            buffering = false
             notice = context.getString(R.string.editor_preview_failed) +
                 (previewPlayer.lastError?.let { error -> "：$error" } ?: "")
+        }
+    }
+
+    /**
+     * The editor is the player: opening a recording starts it.
+     *
+     * The library no longer has a play button of its own — tapping a recording
+     * opens it here, and the thing the user wanted to hear starts playing
+     * (m00678). It waits for the clips the first frame fills in, and does it
+     * once: an edit that pauses playback must not be restarted by a recompose.
+     */
+    var autoStarted by remember { mutableStateOf(false) }
+    LaunchedEffect(clips.isNotEmpty(), totalMs) {
+        if (!autoStarted && clips.isNotEmpty() && totalMs > 0L) {
+            autoStarted = true
+            togglePlay()
         }
     }
 
@@ -407,7 +428,15 @@ fun EditorScreen(
                     playheadMs = at
                 }
                 if (viewportSpanMs > 0L) {
-                    val window = EditFollow.pinned(playheadMs, viewportSpanMs, totalMs)
+                    // The window scrolls when the playhead touches its edge,
+                    // not every frame around it: the line moves across the
+                    // screen and the view jumps a page when it gets there, which
+                    // is what every editor does (m00678).
+                    val window = EditFollow.revealed(
+                        current = EditViewport(viewportStartMs, viewportSpanMs),
+                        playheadMs = playheadMs,
+                        totalMs = totalMs,
+                    )
                     viewportStartMs = window.startMs
                     viewportSpanMs = window.spanMs
                 }
@@ -448,33 +477,42 @@ fun EditorScreen(
     }
 
     /**
-     * Moves the recording under the finger.
+     * Scrolls the timeline under the finger.
      *
-     * The finger drags the audio, so the *window* moves and the playhead is read
-     * back from where the anchor now lands. Re-pinning the window around a moved
-     * playhead instead would cancel the drag out — the waveform would stand still
-     * under a moving finger, which is what "拖动会卡住" was.
+     * A drag moves the window and nothing else: the playhead is a moment on the
+     * recording, and scrolling does not change which moment the user is on. The
+     * window is allowed to run off either end of the recording — the audio's
+     * first and last sample are not walls the finger stops at, and the clamp
+     * that made them walls is what "波形滑动还是太死" described (m00678).
      */
-    fun scrubBy(deltaMs: Long) {
-        if (totalMs <= 0L || deltaMs == 0L) return
-        val span = viewportSpanMs.coerceIn(1L, totalMs)
-        val maxStart = (totalMs - span).coerceAtLeast(0L)
-        val nextStart = (viewportStartMs + deltaMs).coerceIn(-span / 2, maxStart)
-        viewportStartMs = nextStart
-        viewportSpanMs = span
-        playheadMs = (nextStart + (span * EditFollow.ANCHOR_FRACTION).toLong())
-            .coerceIn(0L, totalMs)
+    fun panBy(deltaMs: Long) {
+        if (deltaMs == 0L || viewportSpanMs <= 0L) return
+        val next = EditFollow.panned(
+            current = EditViewport(viewportStartMs, viewportSpanMs),
+            deltaMs = deltaMs,
+            totalMs = totalMs,
+        )
+        viewportStartMs = next.startMs
+        viewportSpanMs = next.spanMs
         pickedCutMs = null
     }
 
-    /** Moves the playhead to [toMs]; used by the zoom bar and by a tap outside. */
+    /** Moves the playhead to [toMs]; used by a tap on the waveform and by the merge strip. */
     fun seekTo(toMs: Long) {
         if (totalMs <= 0L) return
         playheadMs = toMs.coerceIn(0L, totalMs)
+        // Playing already and asked to hear from somewhere else: the playlist
+        // is seeked, which is what "listen from the cursor" means. Paused: the
+        // window is scrolled to show the moment, so the next press plays it.
         if (previewPlaying) {
             previewPlayer.seekTo(playheadMs)
-        } else if (viewportSpanMs > 0L) {
-            viewportStartMs = EditFollow.pinned(playheadMs, viewportSpanMs, totalMs).startMs
+        }
+        if (viewportSpanMs > 0L) {
+            viewportStartMs = EditFollow.revealed(
+                current = EditViewport(viewportStartMs, viewportSpanMs),
+                playheadMs = playheadMs,
+                totalMs = totalMs,
+            ).startMs
         }
     }
 
@@ -492,7 +530,11 @@ fun EditorScreen(
         if (length <= 0L) return
         val span = viewportSpanMs.coerceIn(1L, length)
         viewportSpanMs = span
-        viewportStartMs = EditFollow.pinned(playheadMs, span, length).startMs
+        viewportStartMs = EditFollow.revealed(
+            current = EditViewport(viewportStartMs, span),
+            playheadMs = playheadMs,
+            totalMs = length,
+        ).startMs
     }
 
     /** Splits the track where the playhead stands. */
@@ -650,7 +692,7 @@ fun EditorScreen(
                         removed = emptyList(),
                         markers = cutPoints,
                         playheadMs = playheadMs,
-                        onTimelineDrag = { delta -> scrubBy(delta * DRAG_GAIN) },
+                        onTimelineDrag = { delta -> panBy(delta) },
                         onMarkerSelect = { ms ->
                             pickedCutMs = if (pickedCutMs == ms) null else ms
                             pickedSegment = null
@@ -660,6 +702,10 @@ fun EditorScreen(
                             val at = EditMarkers.segmentContaining(cutPoints, timeMs, totalMs)
                             pickedSegment = if (pickedSegment == at) null else at
                             pickedCutMs = null
+                            // …and the tap is also "listen from here": the
+                            // editor is the player now, so a tap on the audio is
+                            // a seek, not just a selection (m00678).
+                            seekTo(timeMs)
                         },
                         onViewportGesture = { zoom, pan, focus ->
                             val next = EditViewportMath.apply(
@@ -674,7 +720,7 @@ fun EditorScreen(
                         },
                         onDraggingChanged = { isDragging -> dragging = isDragging },
                         modifier = Modifier.fillMaxWidth(),
-                        height = 240.dp,
+                        height = null,
                         selectedRange = picked,
                     )
                 }
@@ -1117,13 +1163,3 @@ private const val START_TOLERANCE_MS = 250L
  * happened" the user had to report from memory.
  */
 private const val PREVIEW_STALL_MS = 8_000L
-
-/**
- * How much track a finger travels per pixel dragged, in multiples of 1:1.
- *
- * Dragging used to move the recording exactly as far as the finger, and with a
- * 30 s window on screen that meant a minute of audio cost two full-screen
- * swipes — every report of "波形滑动阻力太大" is this (m00376). Three windows per
- * swipe keeps the drag usable and zoom is still there for precision.
- */
-private const val DRAG_GAIN = 3L

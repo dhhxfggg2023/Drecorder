@@ -7,6 +7,7 @@ import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
@@ -16,6 +17,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -24,6 +26,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -51,15 +54,18 @@ import kotlin.math.roundToLong
  * to it, and dragging it moves the recording under the finger (DESIGN §12.4).
  *
  * Gestures:
- * - one finger drags the recording, which moves the playhead through time;
+ * - one finger drags the timeline: the audio moves with the finger, and the
+ *   window may be dragged a whole window past either end of the recording;
+ * - a tap picks the moment under the finger *and* the stretch around it;
  * - a tap on a cut point picks that cut point;
- * - a tap on the audio picks the stretch between the two cut points around it;
- * - two fingers pan and zoom.
+ * - two fingers zoom and pan.
  *
- * There is no gesture that drags the playhead itself, because the playhead is
- * not a thing on the screen: it is the anchor. Every gesture changes the
- * moment the anchor stands at, and the window is derived from it, so the red
- * line can never move (DESIGN §12.4).
+ * The gestures live on the **whole** waveform area, not on the drawn bars: a
+ * pinch that only works inside a strip a few hundred pixels tall is a pinch the
+ * user cannot find (m00678).
+ *
+ * There is no gesture that drags the playhead itself: a drag moves the
+ * recording, a tap says where to listen from.
  *
  * There is no gesture that drags a cut point either: a cut point is a decision
  * the user made about where the audio should be divided, and a finger that
@@ -67,7 +73,7 @@ import kotlin.math.roundToLong
  * different one by accident (m01839). Cut points are dropped, picked and
  * removed — never moved.
  *
- * The viewport is owned by the editor screen: two sources edited in one
+ * The viewport is owned by the editor screen: several recordings edited in one
  * session share one window, so the gesture is reported upwards as a request
  * rather than applied here.
  */
@@ -80,13 +86,14 @@ fun WaveformView(
     removed: List<KeepRange>,
     markers: List<Long>,
     playheadMs: Long?,
-    onTimelineDrag: (playheadDeltaMs: Long) -> Unit,
+    onTimelineDrag: (windowDeltaMs: Long) -> Unit,
     onMarkerSelect: (ms: Long) -> Unit = {},
     onSegmentTap: (timeMs: Long) -> Unit = {},
     onViewportGesture: (zoomFactor: Float, panFraction: Float, focusFraction: Float) -> Unit,
     onDraggingChanged: (dragging: Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
-    height: Dp = 240.dp,
+    /** A fixed height, or null to take whatever height the parent offers. */
+    height: Dp? = 240.dp,
     waveColor: Color = Color(0xFF3D7EFF),
     removedColor: Color = Color(0xFF9AA0A6),
     rulerColor: Color = Color(0x66000000),
@@ -98,6 +105,13 @@ fun WaveformView(
 ) {
     val textMeasurer = rememberTextMeasurer()
     var widthPx by remember { mutableIntStateOf(0) }
+
+    // The bars are drawn a few pixels apart with round caps, so one column of
+    // the binning is one *bar*, not one pixel-wide sliver: a wall of 1-pixel
+    // lines reads as a solid rectangle, which is what the user called "矩形方块，
+    // 不好看" (m00678).
+    val barStepPx = with(LocalDensity.current) { BAR_STEP.toPx() }
+    val barWidthPx = with(LocalDensity.current) { BAR_WIDTH.toPx() }
 
     // The gesture callback runs the whole time a finger is down, and the
     // gestures change the viewport *while* they run. Reading these through
@@ -118,18 +132,19 @@ fun WaveformView(
     // re-binned into screen columns. It only changes when the viewport or the
     // size changes. The maths is in core-audio so it is unit-tested
     // off-device.
-    val columns = remember(peaks, startMs, spanMs, widthPx) {
+    val columns = remember(peaks, startMs, spanMs, widthPx, barStepPx) {
         if (widthPx <= 0) {
             WaveformColumns.EMPTY
         } else {
-            WaveformBins.build(peaks, startMs, spanMs, widthPx)
+            val bars = (widthPx / barStepPx).toInt().coerceAtLeast(1)
+            WaveformBins.build(peaks, startMs, spanMs, bars)
         }
     }
 
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(height)
+            .then(if (height != null) Modifier.height(height) else Modifier.fillMaxHeight())
             .onSizeChanged { widthPx = it.width }
             .pointerInput(Unit) {
                 awaitEachGesture {
@@ -187,11 +202,13 @@ fun WaveformView(
                                 draggingChanged(true)
                             }
                             if (mode == GestureMode.DRAG) {
-                                // The recording is dragged. The anchor stands
-                                // still on the screen, so the recording moving
-                                // left means the anchor is reading a later
-                                // moment: the playhead moves by the opposite
-                                // of the finger.
+                                // The recording is dragged: the content moves
+                                // with the finger, so a finger moving right
+                                // (positive dx) shows *earlier* audio, which is
+                                // a negative move of the window. The playhead is
+                                // not touched by a drag — it is a position on
+                                // the recording, and scrolling does not change
+                                // where the recording is (m00678).
                                 val deltaMs = -EditFollow.pixelsToMs(
                                     dx,
                                     currentSpan,
@@ -232,7 +249,7 @@ fun WaveformView(
                 }
             },
     ) {
-        Canvas(modifier = Modifier.fillMaxWidth().height(height)) {
+        Canvas(modifier = Modifier.fillMaxWidth().fillMaxHeight()) {
             if (widthPx <= 0) return@Canvas
             val rulerHeight = 20.dp.toPx()
             val waveTop = rulerHeight
@@ -302,11 +319,18 @@ fun WaveformView(
                     if (minV == Int.MAX_VALUE) continue
                     val top = midY - (maxV / 32768f) * halfHeight
                     val bottom = midY - (minV / 32768f) * halfHeight
-                    drawLine(
+                    val x = i * barStepPx + barStepPx / 2f
+                    // Rounded caps: a capsule per column, so the waveform reads
+                    // as a waveform and not as a row of rectangles (m00678).
+                    drawRoundRect(
                         color = waveColor,
-                        start = Offset(i + 0.5f, top.coerceAtMost(bottom)),
-                        end = Offset(i + 0.5f, bottom.coerceAtLeast(top)),
-                        strokeWidth = 1.dp.toPx(),
+                        topLeft = Offset(x - barWidthPx / 2f, top.coerceAtMost(bottom)),
+                        size = Size(
+                            barWidthPx,
+                            (bottom.coerceAtLeast(top) - top.coerceAtMost(bottom))
+                                .coerceAtLeast(barWidthPx),
+                        ),
+                        cornerRadius = CornerRadius(barWidthPx / 2f),
                     )
                 }
             }
@@ -325,27 +349,36 @@ fun WaveformView(
 
             // --- playhead ---
             //
-            // The line is drawn **at the anchor**, not at whatever pixel the
-            // playhead's time happens to fall on. The two agree — the window
-            // is placed so that the anchor is exactly the playhead's moment —
-            // but drawing the anchor is what makes the line unable to move:
-            // even a window placed by a bug, or a rounding of one millisecond,
-            // cannot shift it by a pixel (DESIGN §12.4).
-            playheadMs?.let {
-                val x = size.width * EditFollow.ANCHOR_FRACTION
-                drawLine(
-                    color = playheadColor,
-                    start = Offset(x, 0f),
-                    end = Offset(x, waveBottom),
-                    strokeWidth = 3.dp.toPx(),
-                )
-                // A knob at the top, so the line is readable against a busy
-                // waveform.
-                drawCircle(
-                    color = playheadColor,
-                    radius = 9.dp.toPx(),
-                    center = Offset(x, 9.dp.toPx()),
-                )
+            // The line stands at the moment it is at, not at the middle of the
+            // screen: the playhead is a position on the recording, the window is
+            // scrolled to keep it in view, and a line that never moves is a line
+            // that lies about where playback is (m00678).
+            playheadMs?.let { at ->
+                val x = msToX(at, size.width, startMs, spanMs)
+                if (x < 0f || x > size.width) {
+                    // The window was dragged away from the playhead: a stub on
+                    // the edge says which way it went, so it can be found again.
+                    val stubX = if (x < 0f) 4.dp.toPx() else size.width - 4.dp.toPx()
+                    drawCircle(
+                        color = playheadColor.copy(alpha = 0.55f),
+                        radius = 5.dp.toPx(),
+                        center = Offset(stubX, waveTop + 10.dp.toPx()),
+                    )
+                } else {
+                    drawLine(
+                        color = playheadColor,
+                        start = Offset(x, 0f),
+                        end = Offset(x, waveBottom),
+                        strokeWidth = 2.dp.toPx(),
+                    )
+                    // A knob at the top, so the line is readable against a busy
+                    // waveform.
+                    drawCircle(
+                        color = playheadColor,
+                        radius = 7.dp.toPx(),
+                        center = Offset(x, 9.dp.toPx()),
+                    )
+                }
             }
 
             // --- time ruler ---
@@ -370,6 +403,18 @@ private enum class GestureMode { UNDECIDED, DRAG, TRANSFORM }
  * twenty pixels wide can be hit with a finger, one that is three cannot.
  */
 private const val MARKER_FLAG_PX = 24f
+
+/**
+ * The distance between two waveform bars, in dp.
+ *
+ * The gap is what makes the waveform a row of bars rather than a filled block:
+ * at 4 dp apart with 2.5 dp of bar there is a visible channel between them at
+ * every zoom level (m00678).
+ */
+private val BAR_STEP = 4.dp
+
+/** How thick one bar is, in dp. Rounded by half its width at both ends. */
+private val BAR_WIDTH = 2.5.dp
 
 /**
  * The marker within reach of a touch, or null.

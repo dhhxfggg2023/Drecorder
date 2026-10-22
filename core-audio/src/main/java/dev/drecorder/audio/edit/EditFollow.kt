@@ -161,6 +161,61 @@ object EditFollow {
         viewport.startMs + (viewport.spanMs * ANCHOR_FRACTION).toLong()
 
     /**
+     * The window after the finger dragged the waveform by [deltaMs].
+     *
+     * Dragging scrolls the timeline: the content moves with the finger and the
+     * window moves by the same amount of time. The window is **not** stopped at
+     * the first and last sample of the recording — it may be dragged a whole
+     * window past either end, leaving empty space. A timeline that dies at the
+     * edge it happens to be near reads as broken, and that is what "波形滑动
+     * 太死" was: the recording's length, not the cursor, decided whether the
+     * waveform could still move (m00678).
+     */
+    fun panned(current: EditViewport, deltaMs: Long, totalMs: Long): EditViewport {
+        val span = current.spanMs.coerceAtLeast(1L)
+        val total = totalMs.coerceAtLeast(0L)
+        // One full window of empty space on each side: enough that the very
+        // first and very last moment can be pulled to the middle of the screen,
+        // bounded so the recording cannot be scrolled out of sight entirely.
+        val minStart = -span
+        val maxStart = (total - 1L).coerceAtLeast(0L)
+        return EditViewport(
+            startMs = (current.startMs + deltaMs).coerceIn(minStart, maxStart),
+            spanMs = span,
+        )
+    }
+
+    /**
+     * Greys out nothing: the window that keeps the playhead visible.
+     *
+     * Playback scrolls only when the playhead **touches the edge of the
+     * window** — the cursor and the boundary decide, not the length of the
+     * recording (m00678). The playhead keeps its place on screen while it is
+     * inside `[trail, lead]` of the window, and the window jumps half a window
+     * forward or back when it crosses either mark, which is what every editor
+     * does and what keeps the red line from standing still in the middle.
+     *
+     * @param lead the fraction of the width past which the window scrolls forward
+     * @param trail the fraction of the width before which it scrolls back
+     */
+    fun revealed(
+        current: EditViewport,
+        playheadMs: Long,
+        totalMs: Long,
+        lead: Float = 0.8f,
+        trail: Float = 0.2f,
+    ): EditViewport {
+        val span = current.spanMs.coerceAtLeast(1L)
+        val total = totalMs.coerceAtLeast(1L)
+        // Everything is on screen: there is nowhere to scroll to.
+        if (span >= total) return current
+        val left = current.startMs + (span * trail).toLong()
+        val right = current.startMs + (span * lead).toLong()
+        if (playheadMs in left..right) return current
+        return pinned(playheadMs = playheadMs, spanMs = span, totalMs = total)
+    }
+
+    /**
      * How many milliseconds one pixel covers in a window of [spanMs].
      *
      * Used to turn a touch target measured in pixels into a time range, so

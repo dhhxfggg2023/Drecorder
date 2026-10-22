@@ -42,7 +42,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -51,7 +50,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -73,10 +71,8 @@ import dev.drecorder.data.RecordingLibrary
 import dev.drecorder.data.SilentMarker
 import dev.drecorder.data.formatDuration
 import dev.drecorder.data.formatSize
-import dev.drecorder.playback.RecordingPlayer
 import dev.drecorder.ui.recordingWhenLabel
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -97,7 +93,6 @@ fun LibraryScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
-    val player = remember { RecordingPlayer(context) }
 
     val library = remember(context) {
         RecordingLibrary(
@@ -111,9 +106,6 @@ fun LibraryScreen(
 
     var recordings by remember { mutableStateOf<List<Recording>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
-    var playingPath by remember { mutableStateOf<String?>(null) }
-    var positionMs by remember { mutableStateOf(0L) }
-    var durationMs by remember { mutableStateOf(0L) }
     var selectionMode by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf(emptySet<String>()) }
     var pendingDelete by remember { mutableStateOf<Recording?>(null) }
@@ -134,28 +126,6 @@ fun LibraryScreen(
 
     LaunchedEffect(Unit) { reload() }
 
-    LaunchedEffect(Unit) {
-        player.finished.collect { playingPath = null }
-    }
-
-    LaunchedEffect(Unit) {
-        player.failed.collect { playingPath = null; snackbarHostState.showSnackbar(failed) }
-    }
-
-    LaunchedEffect(playingPath) {
-        while (playingPath != null) {
-            positionMs = player.positionMs
-            durationMs = player.durationMs
-            delay(250)
-        }
-        positionMs = 0L
-        durationMs = 0L
-    }
-
-    DisposableEffect(Unit) {
-        onDispose { player.release() }
-    }
-
     fun notify(message: String) {
         scope.launch { snackbarHostState.showSnackbar(message) }
     }
@@ -167,11 +137,6 @@ fun LibraryScreen(
 
     fun deleteRecordings(targets: List<Recording>) {
         if (targets.isEmpty()) return
-        val playing = playingPath
-        if (playing != null && targets.any { it.file.absolutePath == playing }) {
-            player.stop()
-            playingPath = null
-        }
         scope.launch {
             val ok = withContext(Dispatchers.IO) { targets.all { library.delete(it) } }
             reload()
@@ -313,9 +278,6 @@ fun LibraryScreen(
                             recording = recording,
                             selectionMode = selectionMode,
                             selected = recording.displayName in selected,
-                            isPlaying = playingPath == recording.file.absolutePath,
-                            positionMs = if (playingPath == recording.file.absolutePath) positionMs else 0L,
-                            durationMs = if (playingPath == recording.file.absolutePath) durationMs else 0L,
                             onToggleSelect = {
                                 selected = if (recording.displayName in selected) {
                                     selected - recording.displayName
@@ -323,22 +285,15 @@ fun LibraryScreen(
                                     selected + recording.displayName
                                 }
                             },
-                            onTogglePlay = {
-                                if (playingPath == recording.file.absolutePath) {
-                                    player.stop()
-                                    playingPath = null
+                            onOpen = {
+                                // A recording opens the editor, which is where it
+                                // is played: the library is a list, not a player
+                                // (m00678).
+                                if (editingDisabled) {
+                                    notify(editBusy)
                                 } else {
-                                    val started = player.play(recording.file)
-                                    if (started) {
-                                        playingPath = recording.file.absolutePath
-                                    } else {
-                                        notify(failed)
-                                    }
+                                    onEdit(listOf(recording))
                                 }
-                            },
-                            onSeek = { target ->
-                                player.seekTo(target)
-                                positionMs = target
                             },
                             onShare = {
                                 val uri = runCatching {
@@ -499,12 +454,8 @@ private fun RecordingRow(
     recording: Recording,
     selectionMode: Boolean,
     selected: Boolean,
-    isPlaying: Boolean,
-    positionMs: Long,
-    durationMs: Long,
     onToggleSelect: () -> Unit,
-    onTogglePlay: () -> Unit,
-    onSeek: (Long) -> Unit,
+    onOpen: () -> Unit,
     onShare: () -> Unit,
     onRename: () -> Unit,
     onEdit: () -> Unit,
@@ -512,7 +463,6 @@ private fun RecordingRow(
     editingDisabled: Boolean = false,
 ) {
     var menuVisible by remember { mutableStateOf(false) }
-    var dragValue by remember(recording.displayName) { mutableStateOf<Float?>(null) }
 
     Surface(
         color = if (selected) {
@@ -526,38 +476,32 @@ private fun RecordingRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(onClick = if (selectionMode) onToggleSelect else onTogglePlay)
+                // Tapping a recording opens it — in the editor, which plays it.
+                // There is no play button here any more: a list that plays and an
+                // editor that plays are two players, and the one in the list was
+                // the one the user never asked for (m00678).
+                .clickable(onClick = if (selectionMode) onToggleSelect else onOpen)
                 .padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-        if (selectionMode) {
-            Checkbox(checked = selected, onCheckedChange = { onToggleSelect() })
-        } else {
-            Surface(
-                shape = CircleShape,
-                color = if (isPlaying) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.secondaryContainer
-                },
-                modifier = Modifier.size(44.dp),
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = if (isPlaying) Icons.Filled.Stop else Icons.Filled.PlayArrow,
-                        contentDescription = stringResource(
-                            if (isPlaying) R.string.library_playing else R.string.library_play,
-                        ),
-                        tint = if (isPlaying) {
-                            MaterialTheme.colorScheme.onPrimary
-                        } else {
-                            MaterialTheme.colorScheme.onSecondaryContainer
-                        },
-                    )
+            if (selectionMode) {
+                Checkbox(checked = selected, onCheckedChange = { onToggleSelect() })
+            } else {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    modifier = Modifier.size(44.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Filled.GraphicEq,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                        )
+                    }
                 }
             }
-        }
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = recordingWhenLabel(recording),
@@ -608,37 +552,6 @@ private fun RecordingRow(
                             color = MaterialTheme.colorScheme.onSecondaryContainer,
                         )
                     }
-                }
-            }
-            if (isPlaying && !selectionMode) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = formatDuration(positionMs),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Slider(
-                        value = (dragValue ?: positionMs.toFloat())
-                            .coerceIn(0f, durationMs.coerceAtLeast(1L).toFloat()),
-                        onValueChange = { dragValue = it },
-                        onValueChangeFinished = {
-                            dragValue?.let { onSeek(it.toLong()) }
-                            dragValue = null
-                        },
-                        valueRange = 0f..durationMs.coerceAtLeast(1L).toFloat(),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(32.dp)
-                            .padding(horizontal = 6.dp),
-                    )
-                    Text(
-                        text = formatDuration(durationMs),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                 }
             }
         }
