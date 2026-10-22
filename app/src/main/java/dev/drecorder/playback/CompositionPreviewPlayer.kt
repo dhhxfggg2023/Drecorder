@@ -125,6 +125,17 @@ class CompositionPreviewPlayer(context: Context) {
         }
     }
 
+    /**
+     * Stops the sound and keeps the composition loaded and its position.
+     *
+     * The editor pauses and resumes far more often than it stops — every edit
+     * pauses, and pressing play again has to pick up where the playhead is — so
+     * this must not tear the composition down the way [stop] does.
+     */
+    fun pause() {
+        runCatching { player.pause() }
+    }
+
     /** Current playback position in ms; 0 while nothing is loaded. */
     val positionMs: Long
         get() = runCatching { player.currentPosition }.getOrDefault(0L)
