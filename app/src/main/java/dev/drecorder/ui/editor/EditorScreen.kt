@@ -202,6 +202,15 @@ fun EditorScreen(
     var previewPlaying by remember { mutableStateOf(false) }
     var previewPositionMs by remember { mutableStateOf(0L) }
     var previewDurationMs by remember { mutableStateOf(0L) }
+    /**
+     * The moment of the merged stream the current play was asked to start at.
+     *
+     * The follow loop refuses to move anything until the player's position has
+     * actually reached it: the position reads zero while the composition is
+     * being built, and following that zero is what turned "play from here" into
+     * "play from the beginning" (m03086).
+     */
+    var previewStartMs by remember { mutableStateOf(0L) }
     /** True while the player is preparing the composition and cannot sound yet. */
     var previewPreparing by remember { mutableStateOf(false) }
 
@@ -434,18 +443,22 @@ fun EditorScreen(
     // decode) then restarts every frame too. That storm of window decodes is
     // what starved the codec and stopped the audio after a couple of seconds.
     LaunchedEffect(previewPlaying) {
+        // Where the play was pressed. The player's position is still 0 until
+        // the composition is built and the seek has landed, so following it
+        // before then drags the playhead — and the window with it — back to the
+        // start of the recording the instant the button is pressed. That is
+        // what "it does not play from where the cursor is" looked like: the
+        // seek was correct and the follow loop undid it (m03086).
+        var startedAt: Long? = null
         while (previewPlaying) {
             withFrameMillis { }
             previewPreparing = previewPlayer.isBuffering
-            // Nothing is followed until the player has actually reached the
-            // moment play was pressed at. Before then its position is still
-            // zero — the composition is being built and the seek has not been
-            // applied — and following it dragged the playhead, and the window
-            // with it, back to the beginning of the recording the instant the
-            // button was pressed: which is what "it does not play from where
-            // the cursor is" looked like (m01839).
-            if (previewPreparing || waveformDragging) continue
+            if (waveformDragging) continue
             val position = previewPlayer.positionMs
+            // Nothing is followed until the player has actually reached the
+            // moment play was pressed at.
+            val from = startedAt ?: previewStartMs.also { startedAt = it }
+            if (position < from - START_TOLERANCE_MS) continue
             previewPositionMs = position
             previewDurationMs = previewPlayer.durationMs
             val index = plan.sources.indices.firstOrNull { candidate ->
@@ -1175,6 +1188,7 @@ fun EditorScreen(
                                     ?: 0L
                                 if (previewPlayer.play(composition, from)) {
                                     previewPlaying = true
+                                    previewStartMs = from
                                     previewPositionMs = from
                                 } else {
                                     notice = context.getString(R.string.editor_preview_failed)
@@ -1253,17 +1267,13 @@ fun EditorScreen(
                             ),
                         )
                     }
-                    // The cut point stays picked, and the stretch it closes —
-                    // from the cut before it to this one — is picked with it, so
-                    // the buttons below act on the piece the user just marked
-                    // off. It is *this* piece and not the tail of the
-                    // recording, which is what two cuts used to offer.
+                    // The cut point stays picked, so deleting it again is one
+                    // tap. The stretch next to it is *not* picked: a cut is a
+                    // place, a selection is a decision, and turning the first
+                    // into the second put a delete button on screen that the
+                    // user never asked for (m03086).
                     selectedMarkerMs = at
-                    selectedSegment = EditMarkers.segmentEndingAt(
-                        markers = source.markers,
-                        atMs = at,
-                        totalMs = source.durationMs,
-                    )
+                    selectedSegment = null
                 },
                 onDelete = { ms ->
                     sources = sources.replaceAt(selectedIndex) {
@@ -1510,7 +1520,14 @@ fun EditorScreen(
         )
     }
 
-    // --- export: a new recording, or the one that is already there ---
+    // --- export: replace the recording, or keep both ---
+    //
+    // The two outcomes used to be a primary button and a dismiss button, and the
+    // primary was "save as a new recording": the user pressed the obvious button
+    // expecting the edit to land on the recording they opened, and got a second,
+    // shorter recording beside it instead (m03086). The asking is therefore
+    // explicit about which file each choice touches, and the edit-in-place is
+    // the primary.
     if (showExportDialog) {
         val first = sources.firstOrNull()
         AlertDialog(
@@ -1532,16 +1549,6 @@ fun EditorScreen(
                 TextButton(
                     onClick = {
                         showExportDialog = false
-                        runExport(destination = null)
-                    },
-                ) {
-                    Text(stringResource(R.string.editor_export_save_as))
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = {
-                        showExportDialog = false
                         val target = first
                         if (target != null) {
                             pendingEdit = PendingEdit.Overwrite(target.displayName)
@@ -1549,6 +1556,16 @@ fun EditorScreen(
                     },
                 ) {
                     Text(stringResource(R.string.editor_export_overwrite))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showExportDialog = false
+                        runExport(destination = null)
+                    },
+                ) {
+                    Text(stringResource(R.string.editor_export_save_as))
                 }
             },
         )
@@ -1681,6 +1698,17 @@ private const val FRAME_TOLERANCE_MS = 50L
  * while the export has to decode every entry.
  */
 private const val MAX_EDIT_SOURCES = 32
+
+/**
+ * How close the player's position must be to the moment play was pressed before
+ * the editor starts following it, in ms.
+ *
+ * A seek lands on the frame it lands on, not exactly on the millisecond that was
+ * asked for, and a player that has not been seeked yet reports zero — so the
+ * comparison needs enough slack to accept the landing, and nowhere near enough to
+ * accept the zero it is meant to reject.
+ */
+private const val START_TOLERANCE_MS = 250L
 
 /**
  * How often the playhead is read while the preview plays, in ms.
