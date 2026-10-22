@@ -164,6 +164,11 @@
     <string name="editor_marker_deleted">已删除切点</string>
     <string name="editor_marker_delete">删除切点 %1$s</string>
     <string name="editor_merge_order">合并顺序（从上往下依次播放）</string>
+    <string name="editor_order">合并顺序</string>
+    <string name="editor_order_earlier">前移</string>
+    <string name="editor_order_later">后移</string>
+    <string name="editor_marker_not_joinable">这个接缝两边不是同一处音频（中间删过东西，或本来就是两段录音），接不起来。</string>
+    <string name="editor_cut_needs_room">这个位置不能加切点：已经是一处切点，或者落在录音外面。</string>
     <string name="editor_segment_picked">已选 %1$s – %2$s（%3$s）</string>
     <string name="editor_segment_delete">删除</string>
     <string name="editor_segment_keep">只保留</string>

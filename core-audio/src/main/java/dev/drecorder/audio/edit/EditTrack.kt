@@ -198,6 +198,36 @@ object EditTrack {
         return clips.size
     }
 
+    /** The index of the clip that ends exactly at [outputMs], or null. */
+    private fun seamIndexAt(clips: List<EditClip>, outputMs: Long): Int? {
+        if (clips.size < 2) return null
+        var cursor = 0L
+        for (index in 0 until clips.size - 1) {
+            cursor += clips[index].durationMs
+            if (cursor == outputMs) return index
+        }
+        return null
+    }
+
+    /**
+     * Whether the two clips meeting at [outputMs] can be joined back into one.
+     *
+     * Two clips of the same recording that are contiguous *in that recording*
+     * join; anything else is a seam between material that is not adjacent in
+     * the source — two different files, or the same file with a stretch cut out
+     * between them — and joining it would silently drop or add audio.
+     *
+     * The screen asks this before it offers to delete a cut: a button that
+     * announces "已删除切点" over a track that did not change is the worst kind
+     * of lie, because the user then believes the cut is gone (m00376).
+     */
+    fun canJoinAt(clips: List<EditClip>, outputMs: Long): Boolean {
+        val index = seamIndexAt(clips, outputMs) ?: return false
+        val left = clips[index]
+        val right = clips[index + 1]
+        return left.file == right.file && left.endMs == right.startMs
+    }
+
     /**
      * Joins the two clips that meet at [outputMs] into one, when they are the
      * same recording and contiguous in it.
@@ -207,21 +237,34 @@ object EditTrack {
      * Clips of *different* files are never joined: there is nothing to join.
      */
     fun removeCutAt(clips: List<EditClip>, outputMs: Long): List<EditClip> {
-        if (clips.size < 2) return clips
-        var cursor = 0L
-        for (index in 0 until clips.size - 1) {
-            cursor += clips[index].durationMs
-            if (cursor != outputMs) continue
-            val left = clips[index]
-            val right = clips[index + 1]
-            if (left.file != right.file || left.endMs != right.startMs) return clips
-            val joined = left.copy(endMs = right.endMs)
-            return clips.toMutableList().apply {
-                removeAt(index + 1)
-                set(index, joined)
-            }
+        val index = seamIndexAt(clips, outputMs) ?: return clips
+        if (!canJoinAt(clips, outputMs)) return clips
+        val joined = clips[index].copy(endMs = clips[index + 1].endMs)
+        return clips.toMutableList().apply {
+            removeAt(index + 1)
+            set(index, joined)
         }
-        return clips
+    }
+
+    /**
+     * Moves one whole recording to [toIndex] among the recordings on the track.
+     *
+     * This is the merge order: which recording plays first is the one thing the
+     * old read-only strip could not change, so "合并音频还是不能决定顺序" stayed
+     * true however the strip was drawn (m00376). A recording's clips move
+     * together as one block and keep their own order, because the unit the user
+     * is reordering is the recording, not the clip.
+     */
+    fun moveSource(clips: List<EditClip>, fromIndex: Int, toIndex: Int): List<EditClip> {
+        val sources = files(clips)
+        if (fromIndex !in sources.indices || toIndex !in sources.indices) return clips
+        if (fromIndex == toIndex) return clips
+        val blocks = sources.map { file -> clips.filter { it.file == file } }
+        val reordered = blocks.toMutableList().apply {
+            val block = removeAt(fromIndex)
+            add(toIndex, block)
+        }
+        return reordered.flatten()
     }
 
     /**

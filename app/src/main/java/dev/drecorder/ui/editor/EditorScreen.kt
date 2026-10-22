@@ -17,9 +17,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
@@ -168,6 +166,7 @@ fun EditorScreen(
     var mismatch by remember { mutableStateOf<String?>(null) }
 
     var showExportDialog by remember { mutableStateOf(false) }
+    var showOrder by remember { mutableStateOf(false) }
     var pendingEdit by remember { mutableStateOf<PendingEdit?>(null) }
     var insertCandidates by remember { mutableStateOf<List<Recording>?>(null) }
 
@@ -328,6 +327,19 @@ fun EditorScreen(
         }
     }
 
+    /**
+     * Puts the button back to Play when the composition reaches its end.
+     *
+     * Without this the transport kept showing Pause over a player that had
+     * nothing left to play, so the next press paused instead of playing.
+     */
+    LaunchedEffect(previewPlayer) {
+        previewPlayer.finished.collect {
+            previewPlaying = false
+            buffering = false
+        }
+    }
+
     // --- playback --------------------------------------------------------------
 
     /**
@@ -343,7 +355,15 @@ fun EditorScreen(
             return
         }
         if (clips.isEmpty() || totalMs <= 0L) return
-        val from = playheadMs.coerceIn(0L, (totalMs - 1L).coerceAtLeast(0L))
+        // Standing on the end means "from the beginning". A seek to the end of
+        // the composition lands on silence and ends immediately, and the user
+        // reads that as the second press failing (m00376).
+        val from = if (playheadMs >= totalMs - END_TOLERANCE_MS) {
+            0L
+        } else {
+            playheadMs.coerceIn(0L, (totalMs - 1L).coerceAtLeast(0L))
+        }
+        playheadMs = from
         startedAtMs = from
         buffering = true
         val started = previewPlayer.play(EditComposition.build(plan), fromMs = from)
@@ -475,6 +495,17 @@ fun EditorScreen(
         viewportStartMs = EditFollow.pinned(playheadMs, span, length).startMs
     }
 
+    /** Splits the track where the playhead stands. */
+    fun addCut() {
+        val updated = EditTrack.cutAt(clips, playheadMs)
+        if (updated.size == clips.size) {
+            notice = context.getString(R.string.editor_cut_needs_room)
+            return
+        }
+        pickedCutMs = null
+        afterEdit(updated)
+    }
+
     // --- export ----------------------------------------------------------------
 
     var exportToRun by remember { mutableStateOf<File?>(null) }
@@ -519,6 +550,9 @@ fun EditorScreen(
         EditTrack.keepOnly(clips, picked.startMs, picked.endMs),
     ) > 0L
 
+    /** Whether the picked cut point can actually be removed. */
+    val cutJoinable = pickedCutMs?.let { at -> EditTrack.canJoinAt(clips, at) } ?: false
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -537,17 +571,6 @@ fun EditorScreen(
                     }
                 },
                 actions = {
-                    IconButton(
-                        onClick = {
-                            insertCandidates = null
-                            scope.launch { insertCandidates = loadLibrary() }
-                        },
-                    ) {
-                        Icon(
-                            Icons.Filled.MusicNote,
-                            contentDescription = stringResource(R.string.editor_insert_audio),
-                        )
-                    }
                     TextButton(
                         onClick = { showExportDialog = true },
                         enabled = !exporting && clips.isNotEmpty() && totalMs > 0L,
@@ -627,7 +650,7 @@ fun EditorScreen(
                         removed = emptyList(),
                         markers = cutPoints,
                         playheadMs = playheadMs,
-                        onTimelineDrag = { delta -> scrubBy(delta) },
+                        onTimelineDrag = { delta -> scrubBy(delta * DRAG_GAIN) },
                         onMarkerSelect = { ms ->
                             pickedCutMs = if (pickedCutMs == ms) null else ms
                             pickedSegment = null
@@ -683,18 +706,29 @@ fun EditorScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        stringResource(R.string.editor_marker_picked, formatDuration(pickedCutMs!!)),
+                        // A cut that cannot be removed says so instead of the
+                        // button announcing a deletion that never happened:
+                        // "切点删除失败" was the screen lying about work it had
+                        // not done (m00376).
+                        if (cutJoinable) {
+                            stringResource(R.string.editor_marker_picked, formatDuration(pickedCutMs!!))
+                        } else {
+                            stringResource(R.string.editor_marker_not_joinable)
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.weight(1f),
                     )
-                    TextButton(onClick = {
-                        val at = pickedCutMs
-                        pickedCutMs = null
-                        if (at != null) {
-                            afterEdit(EditTrack.removeCutAt(clips, at))
-                            notice = context.getString(R.string.editor_marker_deleted)
-                        }
-                    }) {
+                    TextButton(
+                        enabled = cutJoinable,
+                        onClick = {
+                            val at = pickedCutMs
+                            pickedCutMs = null
+                            if (at != null) {
+                                afterEdit(EditTrack.removeCutAt(clips, at))
+                                notice = context.getString(R.string.editor_marker_deleted)
+                            }
+                        },
+                    ) {
                         Text(stringResource(R.string.editor_marker_delete, formatDuration(pickedCutMs!!)))
                     }
                 }
@@ -708,6 +742,35 @@ fun EditorScreen(
                         onKeepOnly = { pendingEdit = PendingEdit.KeepOnly(picked) },
                         onRepeat = { pendingEdit = PendingEdit.Repeat(picked) },
                     )
+                }
+            }
+
+            // The things a thumb does mid-edit, in one labeled row just above
+            // the transport. These were a music note in the toolbar and a bare
+            // plus floating next to the clock; neither looked like something to
+            // press, and neither was where the thumb already is (m00376).
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                TextButton(onClick = { addCut() }) {
+                    Text(stringResource(R.string.editor_marker_add))
+                }
+                TextButton(
+                    onClick = {
+                        insertCandidates = null
+                        scope.launch { insertCandidates = loadLibrary() }
+                    },
+                ) {
+                    Text(stringResource(R.string.editor_insert_audio))
+                }
+                if (sources.size > 1) {
+                    TextButton(onClick = { showOrder = true }) {
+                        Text(stringResource(R.string.editor_order))
+                    }
                 }
             }
 
@@ -725,22 +788,6 @@ fun EditorScreen(
                         fontWeight = FontWeight.Medium,
                         modifier = Modifier.width(56.dp),
                     )
-                    IconButton(
-                        onClick = {
-                            val updated = EditTrack.cutAt(clips, playheadMs)
-                            if (updated.size == clips.size) {
-                                notice = context.getString(R.string.editor_select_need_markers)
-                            } else {
-                                pickedCutMs = null
-                                afterEdit(updated)
-                            }
-                        },
-                    ) {
-                        Icon(
-                            Icons.Filled.Add,
-                            contentDescription = stringResource(R.string.editor_marker_add),
-                        )
-                    }
                     Spacer(Modifier.weight(1f))
                     FilledIconButton(
                         onClick = { togglePlay() },
@@ -965,6 +1012,48 @@ fun EditorScreen(
         )
     }
 
+    if (showOrder) {
+        AlertDialog(
+            onDismissRequest = { showOrder = false },
+            title = { Text(stringResource(R.string.editor_merge_order)) },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    sources.forEachIndexed { index, (file, length) ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "${index + 1}. ${waveforms[file.path]?.displayName ?: file.name}" +
+                                    "  ${formatDuration(length)}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(
+                                enabled = index > 0,
+                                onClick = {
+                                    afterEdit(EditTrack.moveSource(clips, index, index - 1))
+                                },
+                            ) {
+                                Text(stringResource(R.string.editor_order_earlier))
+                            }
+                            TextButton(
+                                enabled = index < sources.lastIndex,
+                                onClick = {
+                                    afterEdit(EditTrack.moveSource(clips, index, index + 1))
+                                },
+                            ) {
+                                Text(stringResource(R.string.editor_order_later))
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showOrder = false }) {
+                    Text(stringResource(android.R.string.ok))
+                }
+            },
+        )
+    }
+
     mismatch?.let { message ->
         AlertDialog(
             onDismissRequest = { mismatch = null },
@@ -1028,3 +1117,13 @@ private const val START_TOLERANCE_MS = 250L
  * happened" the user had to report from memory.
  */
 private const val PREVIEW_STALL_MS = 8_000L
+
+/**
+ * How much track a finger travels per pixel dragged, in multiples of 1:1.
+ *
+ * Dragging used to move the recording exactly as far as the finger, and with a
+ * 30 s window on screen that meant a minute of audio cost two full-screen
+ * swipes — every report of "波形滑动阻力太大" is this (m00376). Three windows per
+ * swipe keeps the drag usable and zoom is still there for precision.
+ */
+private const val DRAG_GAIN = 3L

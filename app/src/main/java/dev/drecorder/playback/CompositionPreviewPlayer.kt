@@ -1,6 +1,7 @@
 package dev.drecorder.playback
 
 import android.content.Context
+import android.util.Log
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
@@ -47,6 +48,7 @@ class CompositionPreviewPlayer(context: Context) {
 
     private val listener = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
+            log("state=${stateWord(playbackState)} duration=$durationMs position=$positionMs")
             when (playbackState) {
                 Player.STATE_READY -> applyPendingSeek()
                 Player.STATE_ENDED -> _finished.tryEmit(Unit)
@@ -63,7 +65,13 @@ class CompositionPreviewPlayer(context: Context) {
 
         override fun onPlayerError(error: PlaybackException) {
             pendingSeekMs = null
+            // The report the user was told to send is the line this logs.
+            log("error=${describe(error)}")
             _failed.tryEmit(error)
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            log("isPlaying=$isPlaying state=$stateLabel position=$positionMs")
         }
     }
 
@@ -82,10 +90,18 @@ class CompositionPreviewPlayer(context: Context) {
         val duration = runCatching { player.duration }.getOrDefault(0L)
         if (duration <= 0L) return
         if (pending >= duration) {
+            // The composition is shorter than the point play was pressed at, so
+            // the seek lands on the end and the first thing the user hears is
+            // silence followed by "ended" — the shape of "第二次试听就失败"
+            // (m00376). Starting from the beginning is the behaviour every
+            // player has; a seek into nothing is not a position to keep.
             pendingSeekMs = null
+            log("pending seek $pending past duration $duration, rewound to 0")
+            runCatching { player.seekTo(0L) }
             return
         }
         runCatching { player.seekTo(pending) }
+        log("applied pending seek $pending of $duration")
         pendingSeekMs = null
     }
 
@@ -103,6 +119,7 @@ class CompositionPreviewPlayer(context: Context) {
      * Returns false when the composition cannot be handed to the player at all.
      */
     fun play(composition: Composition, fromMs: Long = 0L): Boolean {
+        log("play from=$fromMs items=${composition.sequences.sumOf { it.editedMediaItems.size }}")
         val result = runCatching {
             // A previous composition may still be loaded; `setComposition` is
             // only legal before `prepare()` or after `stop()`, so the player is
@@ -119,6 +136,7 @@ class CompositionPreviewPlayer(context: Context) {
         // "试听失败" on its own told nobody anything — neither the user nor the
         // next session could tell a broken composition from a missing codec.
         lastError = result.exceptionOrNull()?.let { describe(it) }
+        log("play returned success=${result.isSuccess} error=${lastError ?: "none"}")
         return result.isSuccess
     }
 
@@ -152,17 +170,31 @@ class CompositionPreviewPlayer(context: Context) {
      * for what the player was doing while nothing came out of the speaker.
      */
     val stateLabel: String
-        get() = runCatching {
-            when (player.playbackState) {
-                Player.STATE_IDLE -> "idle"
-                Player.STATE_BUFFERING -> "buffering"
-                Player.STATE_READY -> "ready"
-                Player.STATE_ENDED -> "ended"
-                else -> "state=${player.playbackState}"
-            }
-        }.getOrDefault("unknown")
+        get() = runCatching { stateWord(player.playbackState) }.getOrDefault("unknown")
+
+    /** One word for one playback state, used by [stateLabel] and by the log. */
+    private fun stateWord(state: Int): String = when (state) {
+        Player.STATE_IDLE -> "idle"
+        Player.STATE_BUFFERING -> "buffering"
+        Player.STATE_READY -> "ready"
+        Player.STATE_ENDED -> "ended"
+        else -> "state=$state"
+    }
+
+    /**
+     * Writes one line to logcat.
+     *
+     * The screen can only say what the player told it, and everything the user
+     * reports arrives after the phone has been put down — so the sequence of
+     * play/stop/state/error is written down where `adb logcat -d` can read it,
+     * tagged `Drecorder` and nothing else.
+     */
+    private fun log(message: String) {
+        Log.i(TAG, message)
+    }
 
     fun stop() {
+        log("stop")
         runCatching {
             pendingSeekMs = null
             player.stop()
@@ -177,6 +209,7 @@ class CompositionPreviewPlayer(context: Context) {
      * this must not tear the composition down the way [stop] does.
      */
     fun pause() {
+        log("pause at $positionMs")
         runCatching { player.pause() }
     }
 
@@ -212,5 +245,10 @@ class CompositionPreviewPlayer(context: Context) {
             player.removeListener(listener)
             player.release()
         }
+    }
+
+    private companion object {
+        /** The one tag the app logs under, so `logcat -s Drecorder` is enough. */
+        const val TAG = "Drecorder"
     }
 }
