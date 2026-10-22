@@ -179,6 +179,12 @@ fun WaveformView(
                                 abs(change.position.x - down.position.x) > viewConfiguration.touchSlop
                             ) {
                                 mode = GestureMode.DRAG
+                                // The editor has to know that a drag started, not
+                                // just that one ended: while the finger moves the
+                                // recording, the playhead must not also drag the
+                                // window, or the two cancel out and the waveform
+                                // stands still under a moving finger (m03765).
+                                draggingChanged(true)
                             }
                             if (mode == GestureMode.DRAG) {
                                 // The recording is dragged. The anchor stands
@@ -200,7 +206,7 @@ fun WaveformView(
                     // The editor has to know that the finger is down: while
                     // it is, the playhead does not drive the window, because
                     // the finger already does.
-                    draggingChanged(mode == GestureMode.DRAG)
+                    if (mode == GestureMode.DRAG) draggingChanged(false)
 
                     // A finger that went down and never moved is a tap. On a
                     // cut point it picks that cut point; on the audio it picks

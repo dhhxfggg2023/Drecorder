@@ -15,21 +15,24 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -54,12 +57,11 @@ import dev.drecorder.audio.edit.AudioFormatProbe
 import dev.drecorder.audio.edit.AudioFormatSpec
 import dev.drecorder.audio.edit.EditClip
 import dev.drecorder.audio.edit.EditComposition
-import dev.drecorder.audio.edit.EditExporter
 import dev.drecorder.audio.edit.EditExportResult
+import dev.drecorder.audio.edit.EditExporter
 import dev.drecorder.audio.edit.EditFollow
 import dev.drecorder.audio.edit.EditMarkerPlan
 import dev.drecorder.audio.edit.EditMarkers
-import dev.drecorder.audio.edit.EditOrder
 import dev.drecorder.audio.edit.EditSegment
 import dev.drecorder.audio.edit.EditTrack
 import dev.drecorder.audio.edit.EditViewport
@@ -73,7 +75,6 @@ import dev.drecorder.data.formatDuration
 import dev.drecorder.playback.CompositionPreviewPlayer
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -81,9 +82,8 @@ import kotlinx.coroutines.withContext
 /**
  * What the editor knows about one recording's waveform.
  *
- * The track draws a waveform built from the clips, but the *source* waveforms are
- * still per file: a recording is decoded once, however many times it appears on
- * the track.
+ * The track draws one waveform built from the clips, but the *source* waveforms
+ * are per file: a recording is decoded once however many times it appears.
  */
 private data class Waveform(
     val displayName: String,
@@ -96,14 +96,10 @@ private data class Waveform(
 )
 
 /**
- * Something the user asked for that changes the recording without a way back,
- * waiting for a yes.
+ * Something the user asked for that changes the recording without a way back.
  *
- * Every one of these throws audio away or replaces a file on disk, and none of
- * them can be undone from inside the editor, so none of them happen on the first
- * tap. They share one dialog because they share one question — "this cannot be
- * undone, do you mean it?" — and three dialogs is how three of them drift into
- * asking differently.
+ * Every one of these throws audio away or replaces a file on disk and cannot be
+ * undone from inside the editor, so each one is held until the user says yes.
  */
 private sealed interface PendingEdit {
     data class DeleteSegment(val segment: EditSegment) : PendingEdit
@@ -116,13 +112,15 @@ private sealed interface PendingEdit {
 }
 
 /**
- * The editor: one track, one playhead, one waveform.
+ * The editor: one track, one playhead, one waveform — the shape every mobile
+ * editor has, and the one the user asked for twice.
  *
- * The track is a list of [EditClip]s — pieces of recordings laid end to end — so
- * cutting, deleting, repeating and merging are all the same list being edited,
- * and the waveform is built from that list rather than from one file at an
- * offset. The screen draws and forwards intent; everything that decides what an
- * edit means lives in core-audio and is unit-tested on the JVM.
+ * Top to bottom: the toolbar, the waveform (which takes the space it needs, not
+ * a strip at the top), the merge strip *only* when more than one recording is in
+ * play, the actions for the picked stretch, and a transport bar at the bottom
+ * where a thumb reaches it. Cut points live on the waveform; the only list is
+ * the list of recordings being merged, because that is the one order the user
+ * has to be able to change.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -130,11 +128,11 @@ fun EditorScreen(
     recordings: List<Recording>,
     onBack: () -> Unit,
     onExported: (File) -> Unit = {},
-    /** Lists the recordings that can be spliced into this session. */
+    /** Lists the recordings that can be appended to this session. */
     loadLibrary: suspend () -> List<Recording> = { emptyList() },
 ) {
     val context = LocalContext.current
-    val scope: CoroutineScope = rememberCoroutineScope()
+    val scope = rememberCoroutineScope()
 
     var clips by remember { mutableStateOf(emptyList<EditClip>()) }
     var waveforms by remember { mutableStateOf(emptyMap<String, Waveform>()) }
@@ -148,9 +146,9 @@ fun EditorScreen(
     /**
      * The stretch the user picked, in track time.
      *
-     * Only ever what the user tapped: nothing is picked on their behalf, so a cut
-     * point that was just dropped never turns the rest of the track into a
-     * candidate for deletion.
+     * Only ever what the user tapped, and tapping the same stretch again clears
+     * it: a selection that can only be replaced is a selection the user cannot
+     * get rid of.
      */
     var pickedSegment by remember { mutableStateOf<EditSegment?>(null) }
 
@@ -161,7 +159,7 @@ fun EditorScreen(
     var buffering by remember { mutableStateOf(false) }
     /** The moment playback was asked to start at, so the follow loop can wait for it. */
     var startedAtMs by remember { mutableLongStateOf(0L) }
-    var waveformDragging by remember { mutableStateOf(false) }
+    var dragging by remember { mutableStateOf(false) }
 
     var exporting by remember { mutableStateOf(false) }
     var exportProgress by remember { mutableLongStateOf(0L) }
@@ -178,7 +176,13 @@ fun EditorScreen(
 
     val totalMs = EditTrack.totalMs(clips)
     val cutPoints = EditTrack.cutPoints(clips)
-    val files = remember(clips) { EditTrack.files(clips) }
+
+    /** The recordings the track is built from, in play order. */
+    val sources = remember(clips) {
+        EditTrack.files(clips).map { file ->
+            file to clips.filter { it.file == file }.sumOf { it.durationMs }
+        }
+    }
 
     /** The track's waveform, built from the clips; null until they exist. */
     val trackPeaks: PeakData? = remember(clips, waveforms) {
@@ -196,27 +200,30 @@ fun EditorScreen(
      * Decodes one recording's waveform, cache first.
      *
      * A recording is decoded once however many clips point at it, so repeating a
-     * stretch costs nothing: the second copy of the clip draws from the same
-     * waveform.
+     * stretch costs nothing.
      */
     suspend fun ensureWaveform(recording: Recording) {
         val key = recording.file.path
         if (waveforms[key]?.peaks != null || waveforms[key]?.loading == true) return
-        waveforms = waveforms + (key to Waveform(
-            displayName = recording.displayName,
-            durationMs = recording.durationMs,
-            loading = true,
-            progress = 0,
-        ))
+        waveforms = waveforms + (
+            key to Waveform(
+                displayName = recording.displayName,
+                durationMs = recording.durationMs,
+                loading = true,
+                progress = 0,
+            )
+            )
 
         val cacheFile = PeaksCache.fileFor(recording.file, context.filesDir)
         val cached = withContext(Dispatchers.IO) { PeaksCache.read(cacheFile, recording.file) }
         if (cached != null) {
-            waveforms = waveforms + (key to Waveform(
-                displayName = recording.displayName,
-                durationMs = recording.durationMs,
-                peaks = cached.data,
-            ))
+            waveforms = waveforms + (
+                key to Waveform(
+                    displayName = recording.displayName,
+                    durationMs = recording.durationMs,
+                    peaks = cached.data,
+                )
+                )
             return
         }
 
@@ -225,9 +232,9 @@ fun EditorScreen(
                 file = recording.file,
                 onProgress = { percent ->
                     scope.launch {
-                        waveforms = waveforms + (key to (
-                            waveforms[key] ?: Waveform(recording.displayName, recording.durationMs)
-                            ).copy(progress = percent))
+                        val known = waveforms[key]
+                            ?: Waveform(recording.displayName, recording.durationMs)
+                        waveforms = waveforms + (key to known.copy(progress = percent))
                     }
                 },
                 // A long recording is decoded in segments, and the waveform of
@@ -235,9 +242,9 @@ fun EditorScreen(
                 // timeline fills in while the rest is still being decoded.
                 onPartial = { partial ->
                     scope.launch {
-                        waveforms = waveforms + (key to (
-                            waveforms[key] ?: Waveform(recording.displayName, recording.durationMs)
-                            ).copy(peaks = partial))
+                        val known = waveforms[key]
+                            ?: Waveform(recording.displayName, recording.durationMs)
+                        waveforms = waveforms + (key to known.copy(peaks = partial))
                     }
                 },
                 cancelled = decodeCancelled,
@@ -249,24 +256,30 @@ fun EditorScreen(
                 withContext(Dispatchers.IO) {
                     runCatching { PeaksCache.write(cacheFile, decoded.data, recording.file) }
                 }
-                waveforms + (key to Waveform(
-                    displayName = recording.displayName,
-                    durationMs = recording.durationMs,
-                    peaks = decoded.data,
-                ))
+                waveforms + (
+                    key to Waveform(
+                        displayName = recording.displayName,
+                        durationMs = recording.durationMs,
+                        peaks = decoded.data,
+                    )
+                    )
             }
 
-            is PeakDecoder.Result.Failure -> waveforms + (key to Waveform(
-                displayName = recording.displayName,
-                durationMs = recording.durationMs,
-                error = when (decoded.reason) {
-                    PeakDecoder.Reason.Cancelled -> context.getString(
-                        R.string.editor_waveform_cancelled,
-                    )
-                    PeakDecoder.Reason.Stalled -> context.getString(R.string.editor_waveform_stalled)
-                    PeakDecoder.Reason.Unknown -> decoded.message
-                },
-            ))
+            is PeakDecoder.Result.Failure -> waveforms + (
+                key to Waveform(
+                    displayName = recording.displayName,
+                    durationMs = recording.durationMs,
+                    error = when (decoded.reason) {
+                        PeakDecoder.Reason.Cancelled -> context.getString(
+                            R.string.editor_waveform_cancelled,
+                        )
+                        PeakDecoder.Reason.Stalled -> context.getString(
+                            R.string.editor_waveform_stalled,
+                        )
+                        PeakDecoder.Reason.Unknown -> decoded.message
+                    },
+                )
+                )
         }
     }
 
@@ -282,13 +295,13 @@ fun EditorScreen(
                 durationMs = recording.durationMs,
             )
         }
-        val span = EditMarkerPlan.initialSpanMs(EditTrack.totalMs(clips))
+        val length = EditTrack.totalMs(clips)
+        val span = EditMarkerPlan.initialSpanMs(length)
         viewportSpanMs = span
-        viewportStartMs = EditFollow.pinned(0L, span, EditTrack.totalMs(clips)).startMs
+        viewportStartMs = EditFollow.pinned(0L, span, length).startMs
         recordings.forEach { recording -> launch { ensureWaveform(recording) } }
     }
 
-    // A decode still running when the editor closes is a decode nobody waits for.
     DisposableEffect(Unit) {
         onDispose {
             decodeCancelled.set(true)
@@ -302,9 +315,7 @@ fun EditorScreen(
      * Starts playing where the playhead is.
      *
      * The seek happens before the first frame is shown, so playback begins at the
-     * playhead rather than at the beginning of the track and then jumping: the
-     * user pressed play *here*, and hearing the first second of the recording
-     * instead is the bug this replaces.
+     * playhead instead of at the beginning of the track and then jumping.
      */
     fun togglePlay() {
         if (previewPlaying) {
@@ -318,22 +329,23 @@ fun EditorScreen(
         buffering = true
         val started = previewPlayer.play(EditComposition.build(plan), fromMs = from)
         previewPlaying = started
-        if (!started) notice = context.getString(R.string.editor_preview_failed)
+        if (!started) {
+            notice = context.getString(R.string.editor_preview_failed) +
+                (previewPlayer.lastError?.let { error -> "：$error" } ?: "")
+        }
     }
 
     /**
      * Follows the player while it plays.
      *
-     * The playhead is the player's position, and the window is pinned to the
-     * playhead, so the waveform slides past a red line that never moves. It is
-     * driven by the frame clock rather than a timer: a tenth of a second is
-     * visible as a stutter at this size.
+     * The playhead is the player's position and the window is pinned to it, so
+     * the waveform slides past a red line that never moves. Driven by the frame
+     * clock rather than a timer: a tenth of a second is visible at this size.
      *
      * The position is ignored until the player has actually arrived at
-     * [startedAtMs]. A player that has not finished seeking reports zero, and
-     * zero is a position like any other — reading it here would drag the
-     * playhead back to the beginning of the track in the first frame and turn
-     * "play from here" into "play from the start".
+     * [startedAtMs]: a player that has not finished seeking reports zero, and
+     * zero is a position like any other — reading it would drag the playhead to
+     * the start and turn "play from here" into "play from the beginning".
      */
     LaunchedEffect(previewPlaying, totalMs, startedAtMs) {
         if (!previewPlaying) return@LaunchedEffect
@@ -341,7 +353,7 @@ fun EditorScreen(
         while (previewPlaying) {
             withFrameMillis {
                 buffering = previewPlayer.isBuffering
-                if (buffering) return@withFrameMillis
+                if (buffering || dragging) return@withFrameMillis
                 val at = previewPlayer.positionMs
                 if (at < 0L || totalMs <= 0L) return@withFrameMillis
                 if (!armed) {
@@ -355,7 +367,7 @@ fun EditorScreen(
                 } else {
                     playheadMs = at
                 }
-                if (!waveformDragging && viewportSpanMs > 0L) {
+                if (viewportSpanMs > 0L) {
                     val window = EditFollow.pinned(playheadMs, viewportSpanMs, totalMs)
                     viewportStartMs = window.startMs
                     viewportSpanMs = window.spanMs
@@ -364,7 +376,38 @@ fun EditorScreen(
         }
     }
 
-    /** Every edit lands the playhead back on the track it produced. */
+    /**
+     * Moves the recording under the finger.
+     *
+     * The finger drags the audio, so the *window* moves and the playhead is read
+     * back from where the anchor now lands. Re-pinning the window around a moved
+     * playhead instead would cancel the drag out — the waveform would stand still
+     * under a moving finger, which is what "拖动会卡住" was.
+     */
+    fun scrubBy(deltaMs: Long) {
+        if (totalMs <= 0L || deltaMs == 0L) return
+        val span = viewportSpanMs.coerceIn(1L, totalMs)
+        val maxStart = (totalMs - span).coerceAtLeast(0L)
+        val nextStart = (viewportStartMs + deltaMs).coerceIn(-span / 2, maxStart)
+        viewportStartMs = nextStart
+        viewportSpanMs = span
+        playheadMs = (nextStart + (span * EditFollow.ANCHOR_FRACTION).toLong())
+            .coerceIn(0L, totalMs)
+        pickedCutMs = null
+    }
+
+    /** Moves the playhead to [toMs]; used by the zoom bar and by a tap outside. */
+    fun seekTo(toMs: Long) {
+        if (totalMs <= 0L) return
+        playheadMs = toMs.coerceIn(0L, totalMs)
+        if (previewPlaying) {
+            previewPlayer.seekTo(playheadMs)
+        } else if (viewportSpanMs > 0L) {
+            viewportStartMs = EditFollow.pinned(playheadMs, viewportSpanMs, totalMs).startMs
+        }
+    }
+
+    /** Pauses, replaces the track and lands the playhead back on it. */
     fun afterEdit(updated: List<EditClip>) {
         if (previewPlaying) {
             previewPlayer.pause()
@@ -381,30 +424,11 @@ fun EditorScreen(
         viewportStartMs = EditFollow.pinned(playheadMs, span, length).startMs
     }
 
-    fun movePlayhead(toMs: Long) {
-        if (totalMs <= 0L) return
-        playheadMs = toMs.coerceIn(0L, totalMs)
-        if (previewPlaying) {
-            // Dragging the playhead while it plays is a seek, not a pause.
-            runCatching { previewPlayer.seekTo(playheadMs) }
-        } else if (viewportSpanMs > 0L && !waveformDragging) {
-            viewportStartMs = EditFollow.pinned(playheadMs, viewportSpanMs, totalMs).startMs
-        }
-    }
-
     // --- export ----------------------------------------------------------------
 
-    // The file an overwrite replaces, chosen in the export dialog.
     var exportToRun by remember { mutableStateOf<File?>(null) }
     var exportRequested by remember { mutableStateOf(false) }
 
-    /**
-     * Starts an export of the current track.
-     *
-     * The work is started from a `LaunchedEffect` rather than here, because the
-     * progress callback writes state on every percent and a plain `launch` would
-     * let two exports overlap when the button is tapped twice.
-     */
     fun startExport(destination: File?) {
         exportToRun = destination
         exportRequested = true
@@ -449,11 +473,8 @@ fun EditorScreen(
             TopAppBar(
                 title = {
                     Text(
-                        if (clips.map { it.file }.distinct().size > 1) {
-                            stringResource(
-                                R.string.editor_title_merged,
-                                clips.map { it.file }.distinct().size,
-                            )
+                        if (sources.size > 1) {
+                            stringResource(R.string.editor_title_merged, sources.size)
                         } else {
                             stringResource(R.string.editor_title)
                         },
@@ -465,6 +486,17 @@ fun EditorScreen(
                     }
                 },
                 actions = {
+                    IconButton(
+                        onClick = {
+                            insertCandidates = null
+                            scope.launch { insertCandidates = loadLibrary() }
+                        },
+                    ) {
+                        Icon(
+                            Icons.Filled.MusicNote,
+                            contentDescription = stringResource(R.string.editor_insert_audio),
+                        )
+                    }
                     TextButton(
                         onClick = { showExportDialog = true },
                         enabled = !exporting && clips.isNotEmpty() && totalMs > 0L,
@@ -478,8 +510,7 @@ fun EditorScreen(
         Column(
             modifier = Modifier
                 .padding(padding)
-                .fillMaxSize()
-                .padding(horizontal = 12.dp),
+                .fillMaxSize(),
         ) {
             if (clips.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -488,9 +519,42 @@ fun EditorScreen(
                 return@Scaffold
             }
 
-            // The waveform takes whatever the controls leave: this is the thing
-            // the user works on, and a strip at the top of an otherwise empty
-            // screen was the layout they rejected.
+            // The merge strip: the only list in the editor, and it names the
+            // recordings being laid end to end — never the cut points, which are
+            // already drawn on the waveform and are not something to reorder.
+            if (sources.size > 1) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    sources.forEachIndexed { index, (file, length) ->
+                        val name = waveforms[file.path]?.displayName ?: file.name
+                        AssistChip(
+                            onClick = {
+                                // Tapping a recording on the strip jumps the
+                                // playhead to where it starts.
+                                seekTo(
+                                    clips.takeWhile { it.file != file }
+                                        .sumOf { it.durationMs },
+                                )
+                            },
+                            label = {
+                                Text(
+                                    "${index + 1} ${name.take(8)} · ${formatDuration(length)}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            },
+                        )
+                    }
+                }
+            }
+
+            // The waveform takes whatever height is left. This is the thing the
+            // user works on, so it gets the space, not the toolbar.
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -512,17 +576,15 @@ fun EditorScreen(
                         removed = emptyList(),
                         markers = cutPoints,
                         playheadMs = playheadMs,
-                        onTimelineDrag = { delta -> movePlayhead(playheadMs + delta) },
+                        onTimelineDrag = { delta -> scrubBy(delta) },
                         onMarkerSelect = { ms ->
-                            pickedCutMs = ms
+                            pickedCutMs = if (pickedCutMs == ms) null else ms
                             pickedSegment = null
                         },
                         onSegmentTap = { timeMs ->
-                            pickedSegment = EditMarkers.segmentContaining(
-                                cutPoints,
-                                timeMs,
-                                totalMs,
-                            )
+                            // Tapping the picked stretch again lets it go.
+                            val at = EditMarkers.segmentContaining(cutPoints, timeMs, totalMs)
+                            pickedSegment = if (pickedSegment == at) null else at
                             pickedCutMs = null
                         },
                         onViewportGesture = { zoom, pan, focus ->
@@ -536,57 +598,10 @@ fun EditorScreen(
                             viewportStartMs = next.startMs
                             viewportSpanMs = next.spanMs
                         },
-                        onDraggingChanged = { dragging ->
-                            waveformDragging = dragging
-                            if (!dragging && !previewPlaying && viewportSpanMs > 0L) {
-                                viewportStartMs =
-                                    EditFollow.pinned(playheadMs, viewportSpanMs, totalMs).startMs
-                            }
-                        },
+                        onDraggingChanged = { isDragging -> dragging = isDragging },
                         modifier = Modifier.fillMaxWidth(),
                         height = 240.dp,
                         selectedRange = picked,
-                    )
-                }
-            }
-
-            // --- transport ---
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconButton(onClick = { togglePlay() }) {
-                    Icon(
-                        imageVector = if (previewPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                        contentDescription = stringResource(R.string.editor_preview),
-                    )
-                }
-                Text(
-                    stringResource(
-                        R.string.editor_position,
-                        formatDuration(playheadMs),
-                        formatDuration(totalMs),
-                    ),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Spacer(Modifier.weight(1f))
-                TextButton(onClick = {
-                    val updated = EditTrack.cutAt(clips, playheadMs)
-                    if (updated.size == clips.size) {
-                        notice = context.getString(R.string.editor_select_need_markers)
-                    } else {
-                        pickedCutMs = null
-                        afterEdit(updated)
-                    }
-                }) {
-                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text(stringResource(R.string.editor_marker_add))
-                }
-                IconButton(onClick = { insertCandidates = null; scope.launch { insertCandidates = loadLibrary() } }) {
-                    Icon(
-                        Icons.Filled.MusicNote,
-                        contentDescription = stringResource(R.string.editor_insert_audio),
                     )
                 }
             }
@@ -598,10 +613,22 @@ fun EditorScreen(
                 )
             }
 
-            // --- what the picked stretch can be turned into ---
+            notice?.let { message ->
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                )
+            }
+
+            // What can be done to the picked stretch — above the transport, so
+            // the thumb travels between them and nothing moves under it.
             if (pickedCutMs != null) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
@@ -620,89 +647,73 @@ fun EditorScreen(
                         Text(stringResource(R.string.editor_marker_delete, formatDuration(pickedCutMs!!)))
                     }
                 }
-            } else {
-                SegmentActionsRow(
-                    segment = picked,
-                    enabled = pickedHasAudio,
-                    repeatEnabled = picked != null,
-                    onDelete = {
-                        picked?.let { pendingEdit = PendingEdit.DeleteSegment(it) }
-                    },
-                    onKeepOnly = {
-                        picked?.let { pendingEdit = PendingEdit.KeepOnly(it) }
-                    },
-                    onRepeat = {
-                        picked?.let { pendingEdit = PendingEdit.Repeat(it) }
-                    },
-                )
-            }
-
-            notice?.let { message ->
-                Text(
-                    text = message,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.padding(vertical = 4.dp),
-                )
-            }
-
-            // --- the track, in play order ---
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1.1f)
-                    .verticalScroll(rememberScrollState()),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        stringResource(R.string.editor_merge_order),
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.padding(vertical = 6.dp),
+            } else if (picked != null) {
+                Box(Modifier.padding(horizontal = 16.dp)) {
+                    SegmentActionsRow(
+                        segment = picked,
+                        enabled = pickedHasAudio,
+                        repeatEnabled = true,
+                        onDelete = { pendingEdit = PendingEdit.DeleteSegment(picked) },
+                        onKeepOnly = { pendingEdit = PendingEdit.KeepOnly(picked) },
+                        onRepeat = { pendingEdit = PendingEdit.Repeat(picked) },
                     )
                 }
-                clips.forEachIndexed { index, clip ->
-                    val name = waveforms[clip.file.path]?.displayName ?: clip.file.name
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+            }
+
+            // The transport: what a thumb reaches first.
+            Surface(tonalElevation = 3.dp) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        formatDuration(playheadMs),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.width(56.dp),
+                    )
+                    IconButton(
+                        onClick = {
+                            val updated = EditTrack.cutAt(clips, playheadMs)
+                            if (updated.size == clips.size) {
+                                notice = context.getString(R.string.editor_select_need_markers)
+                            } else {
+                                pickedCutMs = null
+                                afterEdit(updated)
+                            }
+                        },
                     ) {
-                        Text(
-                            "${index + 1}",
-                            style = MaterialTheme.typography.labelMedium,
-                            modifier = Modifier.width(20.dp),
+                        Icon(
+                            Icons.Filled.Add,
+                            contentDescription = stringResource(R.string.editor_marker_add),
                         )
-                        Column(Modifier.weight(1f)) {
-                            Text(name, style = MaterialTheme.typography.bodySmall, maxLines = 1)
-                            Text(
-                                "${formatDuration(EditTrack.outputStartOf(clips, index))} · " +
-                                    formatDuration(clip.durationMs),
-                                style = MaterialTheme.typography.labelSmall,
-                            )
-                        }
-                        TextButton(
-                            onClick = {
-                                if (index > 0) afterEdit(EditOrder.move(clips, index, index - 1))
-                            },
-                            enabled = index > 0,
-                        ) { Text("↑") }
-                        TextButton(
-                            onClick = {
-                                if (index < clips.size - 1) {
-                                    afterEdit(EditOrder.move(clips, index, index + 1))
-                                }
-                            },
-                            enabled = index < clips.size - 1,
-                        ) { Text("↓") }
-                        TextButton(
-                            onClick = { afterEdit(clips.filterIndexed { at, _ -> at != index }) },
-                        ) { Text("✕") }
                     }
+                    Spacer(Modifier.weight(1f))
+                    FilledIconButton(
+                        onClick = { togglePlay() },
+                        modifier = Modifier.size(56.dp),
+                    ) {
+                        Icon(
+                            imageVector = if (previewPlaying) {
+                                Icons.Filled.Pause
+                            } else {
+                                Icons.Filled.PlayArrow
+                            },
+                            contentDescription = stringResource(R.string.editor_preview),
+                            modifier = Modifier.size(30.dp),
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        formatDuration(totalMs),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(56.dp),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                    )
                 }
-                Spacer(Modifier.height(24.dp))
             }
         }
     }
@@ -849,14 +860,11 @@ fun EditorScreen(
             onDismissRequest = { insertCandidates = null },
             title = { Text(stringResource(R.string.editor_insert_audio)) },
             text = {
-                val others = candidates.filter { candidate ->
-                    clips.none { it.file == candidate.file } || true
-                }
-                if (others.isEmpty()) {
+                if (candidates.isEmpty()) {
                     Text(stringResource(R.string.editor_insert_none))
                 } else {
                     Column(Modifier.verticalScroll(rememberScrollState())) {
-                        others.forEach { candidate ->
+                        candidates.forEach { candidate ->
                             val format = AudioFormatProbe.probe(candidate.file)
                             val compatible = referenceFormat != null &&
                                 format != null && sameFormat(referenceFormat, format)
@@ -955,9 +963,8 @@ private const val END_TOLERANCE_MS = 60L
  * How close the player's position must be to the moment play was pressed before
  * the editor starts following it, in ms.
  *
- * A seek lands on the frame it lands on, not exactly on the millisecond that was
- * asked for, and a player that has not been seeked yet reports zero — so the
- * comparison needs enough slack to accept the landing, and nowhere near enough to
- * accept the zero it is meant to reject.
+ * A seek lands on the frame it lands on, and a player that has not been seeked
+ * yet reports zero — so the comparison needs enough slack to accept the landing
+ * and nowhere near enough to accept the zero it is meant to reject.
  */
 private const val START_TOLERANCE_MS = 250L

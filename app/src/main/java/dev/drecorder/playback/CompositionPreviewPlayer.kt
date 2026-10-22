@@ -103,7 +103,7 @@ class CompositionPreviewPlayer(context: Context) {
      * Returns false when the composition cannot be handed to the player at all.
      */
     fun play(composition: Composition, fromMs: Long = 0L): Boolean {
-        return runCatching {
+        val result = runCatching {
             // A previous composition may still be loaded; `setComposition` is
             // only legal before `prepare()` or after `stop()`, so the player is
             // stopped first and the new composition replaces the old one.
@@ -115,8 +115,16 @@ class CompositionPreviewPlayer(context: Context) {
             // buffering that follows, so playback starts as soon as there is
             // audio instead of being dropped while the composition is built.
             player.playWhenReady = true
-        }.isSuccess
+        }
+        // "试听失败" on its own told nobody anything — neither the user nor the
+        // next session could tell a broken composition from a missing codec.
+        lastError = result.exceptionOrNull()?.let { it.message ?: it.javaClass.simpleName }
+        return result.isSuccess
     }
+
+    /** Why the last [play] failed, or null when it worked. */
+    var lastError: String? = null
+        private set
 
     fun stop() {
         runCatching {

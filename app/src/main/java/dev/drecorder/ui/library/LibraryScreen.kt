@@ -256,19 +256,33 @@ fun LibraryScreen(
                             )
                         }
                         Spacer(modifier = Modifier.weight(1f))
+                        // Merging starts here: picking two recordings is what
+                        // "merge these" looks like in a library, and the order
+                        // is settled on the waveform afterwards, where the join
+                        // can be heard (m03765).
+                        TextButton(
+                            onClick = {
+                                val picked = recordings.filter { it.displayName in selected }
+                                if (picked.size < 2) {
+                                    scope.launch {
+                                        snackbarHostState.showSnackbar(
+                                            context.getString(R.string.library_merge_need_two),
+                                        )
+                                    }
+                                } else {
+                                    exitSelection()
+                                    onEdit(picked)
+                                }
+                            },
+                        ) {
+                            Text(stringResource(R.string.library_merge))
+                        }
                         TextButton(
                             onClick = { deleteSelectedVisible = true },
                             enabled = selected.isNotEmpty(),
                         ) {
                             Text(stringResource(R.string.library_delete))
                         }
-                        // The merge button that used to sit here is gone: the
-                        // library can only say *which* recordings were picked,
-                        // and choosing the order belongs next to the waveform
-                        // where the user can hear the join. A merge now starts
-                        // from one recording and splices the rest in from the
-                        // editor, which is also where the order is set
-                        // (DESIGN §12.2).
                     }
                 }
             }
