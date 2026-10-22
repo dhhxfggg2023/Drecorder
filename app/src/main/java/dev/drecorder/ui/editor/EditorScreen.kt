@@ -76,6 +76,7 @@ import dev.drecorder.playback.CompositionPreviewPlayer
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -309,6 +310,24 @@ fun EditorScreen(
         }
     }
 
+    /**
+     * Says why the preview died when it dies *after* the press.
+     *
+     * `play()` can only report what throws while the composition is handed over;
+     * a file that fails to load, decode or route reports through the player's
+     * error callback instead, and nothing was listening to it. The result was the
+     * worst of both: no sound, no reason, and a button stuck on Pause claiming to
+     * be playing — every report of "试听还是失败" arrived with nothing to read.
+     */
+    LaunchedEffect(previewPlayer) {
+        previewPlayer.failed.collect { error ->
+            previewPlaying = false
+            buffering = false
+            notice = context.getString(R.string.editor_preview_failed) +
+                "：" + previewPlayer.describe(error)
+        }
+    }
+
     // --- playback --------------------------------------------------------------
 
     /**
@@ -373,6 +392,38 @@ fun EditorScreen(
                     viewportSpanMs = window.spanMs
                 }
             }
+        }
+    }
+
+    /**
+     * Reports the failure the player cannot report itself: loaded, no error, no
+     * sound.
+     *
+     * A composition that neither plays nor errors left the screen saying it was
+     * playing while the speaker stayed silent — and it is that state, not a
+     * crash, that "试听还是失败" kept describing. The watchdog only reads the
+     * player (state word and duration); it never moves the playhead, so it cannot
+     * undo the "play from here" seek the way the follow loop once did.
+     */
+    LaunchedEffect(previewPlaying) {
+        if (!previewPlaying) return@LaunchedEffect
+        val deadline = System.currentTimeMillis() + PREVIEW_STALL_MS
+        while (previewPlaying && !previewPlayer.isPlaying) {
+            if (System.currentTimeMillis() >= deadline) {
+                val state = previewPlayer.stateLabel
+                val duration = previewPlayer.durationMs
+                previewPlayer.stop()
+                previewPlaying = false
+                buffering = false
+                notice = context.getString(
+                    R.string.editor_preview_stalled,
+                    state,
+                    PREVIEW_STALL_MS / 1000L,
+                    duration,
+                )
+                return@LaunchedEffect
+            }
+            delay(250L)
         }
     }
 
@@ -968,3 +1019,12 @@ private const val END_TOLERANCE_MS = 60L
  * and nowhere near enough to accept the zero it is meant to reject.
  */
 private const val START_TOLERANCE_MS = 250L
+
+/**
+ * How long the preview may stay silent before the screen says so, in ms.
+ *
+ * Long enough for a long recording to prepare — buffering a 30-minute file takes
+ * a noticeable moment — and far short of the "I pressed play and nothing
+ * happened" the user had to report from memory.
+ */
+private const val PREVIEW_STALL_MS = 8_000L

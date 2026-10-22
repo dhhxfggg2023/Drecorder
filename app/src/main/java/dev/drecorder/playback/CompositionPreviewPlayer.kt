@@ -118,13 +118,49 @@ class CompositionPreviewPlayer(context: Context) {
         }
         // "试听失败" on its own told nobody anything — neither the user nor the
         // next session could tell a broken composition from a missing codec.
-        lastError = result.exceptionOrNull()?.let { it.message ?: it.javaClass.simpleName }
+        lastError = result.exceptionOrNull()?.let { describe(it) }
         return result.isSuccess
     }
 
     /** Why the last [play] failed, or null when it worked. */
     var lastError: String? = null
         private set
+
+    /**
+     * One line naming why playback failed, for the message the user reads.
+     *
+     * The code comes first and the cause second because the code is the thing
+     * `PlaybackException` documents: "ERROR_CODE_DECODING_FAILED" and a stack of
+     * "Source error" says which layer broke, and a real message underneath says
+     * which file. A failure that only ever reached `lastError` would leave every
+     * *asynchronous* error — the common case, since loading happens after
+     * [play] returns — invisible; those arrive on [failed] and must be worded
+     * here too.
+     */
+    fun describe(error: Throwable): String {
+        val playback = error as? PlaybackException
+            ?: return error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
+        val cause = playback.cause?.message?.takeIf { it.isNotBlank() }
+        return cause?.let { "${playback.errorCodeName}：$it" } ?: playback.errorCodeName
+    }
+
+    /**
+     * The player's state in one word, for the message shown when playback stalls.
+     *
+     * A composition that neither plays nor errors is the one failure this class
+     * cannot report on its own: the screen watches the clock, and needs a word
+     * for what the player was doing while nothing came out of the speaker.
+     */
+    val stateLabel: String
+        get() = runCatching {
+            when (player.playbackState) {
+                Player.STATE_IDLE -> "idle"
+                Player.STATE_BUFFERING -> "buffering"
+                Player.STATE_READY -> "ready"
+                Player.STATE_ENDED -> "ended"
+                else -> "state=${player.playbackState}"
+            }
+        }.getOrDefault("unknown")
 
     fun stop() {
         runCatching {

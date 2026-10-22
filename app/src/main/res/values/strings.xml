@@ -156,6 +156,7 @@
     <string name="editor_waveform_cancelled">已取消生成波形</string>
     <string name="editor_preview">试听</string>
     <string name="editor_preview_failed">试听失败</string>
+    <string name="editor_preview_stalled">试听没有出声：播放器状态 %1$s，等了 %2$d 秒仍无声音，总时长 %3$d ms</string>
     <string name="editor_position">%1$s / %2$s</string>
     <string name="editor_format_mismatch">格式不一致，无法合并：%1$s</string>
     <string name="editor_marker_picked">已选中 %1$s，点右侧按钮可以删除。</string>
