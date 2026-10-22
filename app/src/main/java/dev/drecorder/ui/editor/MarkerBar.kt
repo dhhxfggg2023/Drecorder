@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
@@ -26,6 +27,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -33,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.drecorder.R
@@ -222,95 +225,157 @@ private fun SegmentAction(
 }
 
 /**
- * The order the merged recordings are spliced in.
+ * The tracks that make up a merge, in the order they will be played.
  *
  * A merge is not a set: "A then B" and "B then A" are different recordings, and
  * the library can only say *which* ones were picked. The order therefore has to
  * be visible and changeable here, before the export (DESIGN §12.2).
+ *
+ * It is drawn as a stack of tracks rather than a list of names, because that is
+ * what it is: every row is one stretch of audio that will be laid end to end.
+ * Each row carries its own length, so what the user is ordering is the shape of
+ * the result and not just a list of titles. A row can be moved and taken out,
+ * and the row the timeline is showing is the one drawn in the accent colour.
  *
  * Only shown for a merge; a single recording has nothing to order.
  */
 @Composable
 fun MergeOrderRow(
     names: List<String>,
+    lengths: List<String>,
     selectedIndex: Int,
     onMove: (from: Int, delta: Int) -> Unit,
     onSelect: (index: Int) -> Unit,
+    onRemove: (index: Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier.fillMaxWidth()) {
-        Text(
-            text = stringResource(R.string.editor_merge_order),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(modifier = Modifier.height(4.dp))
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = stringResource(R.string.editor_merge_order),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = "${names.size}",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         names.forEachIndexed { index, name ->
-            Row(
+            val selected = index == selectedIndex
+            Surface(
+                // The track the waveform is showing is the one the user is
+                // cutting on, so it is the one that carries the accent colour.
+                color = if (selected) {
+                    MaterialTheme.colorScheme.secondaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant
+                },
+                shape = MaterialTheme.shapes.small,
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                // The position is the thing the user is changing, so it is
-                // written out: "1", "2", "3" is what makes the order readable
-                // at a glance.
-                Box(
+                Row(
                     modifier = Modifier
-                        .size(24.dp)
-                        .background(
-                            if (index == selectedIndex) {
-                                MaterialTheme.colorScheme.primary
+                        .fillMaxWidth()
+                        .padding(start = 8.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    // The position is the thing the user is changing, so it is
+                    // written out: "1", "2", "3" is what makes the order
+                    // readable at a glance.
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .background(
+                                if (selected) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.surface
+                                },
+                                MaterialTheme.shapes.extraSmall,
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "${index + 1}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (selected) {
+                                MaterialTheme.colorScheme.onPrimary
                             } else {
-                                MaterialTheme.colorScheme.surfaceVariant
+                                MaterialTheme.colorScheme.onSurfaceVariant
                             },
-                            MaterialTheme.shapes.extraSmall,
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = "${index + 1}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (index == selectedIndex) {
-                            MaterialTheme.colorScheme.onPrimary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
-                }
-                TextButton(
-                    onClick = { onSelect(index) },
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text(
-                        text = name,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        fontWeight = if (index == selectedIndex) {
-                            androidx.compose.ui.text.font.FontWeight.Bold
-                        } else {
-                            androidx.compose.ui.text.font.FontWeight.Normal
-                        },
-                    )
-                }
-                IconButton(
-                    onClick = { onMove(index, -1) },
-                    enabled = index > 0,
-                    modifier = Modifier.size(44.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.KeyboardArrowUp,
-                        contentDescription = stringResource(R.string.editor_move_earlier),
-                    )
-                }
-                IconButton(
-                    onClick = { onMove(index, 1) },
-                    enabled = index < names.lastIndex,
-                    modifier = Modifier.size(44.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.KeyboardArrowDown,
-                        contentDescription = stringResource(R.string.editor_move_later),
-                    )
+                        )
+                    }
+                    TextButton(
+                        onClick = { onSelect(index) },
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                text = name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                fontWeight = if (selected) {
+                                    FontWeight.Bold
+                                } else {
+                                    FontWeight.Normal
+                                },
+                            )
+                            Text(
+                                text = lengths.getOrElse(index) { "" },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                    IconButton(
+                        onClick = { onMove(index, -1) },
+                        enabled = index > 0,
+                        modifier = Modifier.size(40.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.KeyboardArrowUp,
+                            contentDescription = stringResource(R.string.editor_move_earlier),
+                        )
+                    }
+                    IconButton(
+                        onClick = { onMove(index, 1) },
+                        enabled = index < names.lastIndex,
+                        modifier = Modifier.size(40.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.KeyboardArrowDown,
+                            contentDescription = stringResource(R.string.editor_move_later),
+                        )
+                    }
+                    // Taking a track out of a merge is not destructive in the
+                    // way a cut is: the recording is still in the library and
+                    // "插入音频" puts it back. That is why it needs no dialog.
+                    if (names.size > 1) {
+                        IconButton(
+                            onClick = { onRemove(index) },
+                            modifier = Modifier.size(40.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Close,
+                                contentDescription = stringResource(
+                                    R.string.editor_remove_track,
+                                ),
+                            )
+                        }
+                    }
                 }
             }
         }

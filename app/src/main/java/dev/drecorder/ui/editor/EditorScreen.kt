@@ -589,6 +589,29 @@ fun EditorScreen(
             }
             return@LaunchedEffect
         }
+        val windowStart = decodeStartMs
+        val windowSpan = decodeSpanMs
+        // A window that was decoded before is read back instead of decoded
+        // again. Without this, every return to a stretch — and every reopening
+        // of the editor — paid for the same decode a second time, which is the
+        // "why does the waveform load every time" the user asked about
+        // (m02684).
+        val windowCacheFile = PeaksCache.windowFileFor(
+            recording = source.file,
+            cacheDirectory = context.filesDir,
+            bucketsPerSecond = detailResolution,
+            startMs = windowStart,
+            spanMs = windowSpan,
+        )
+        val windowCached = withContext(Dispatchers.IO) {
+            PeaksCache.read(windowCacheFile, source.file)
+        }
+        if (windowCached != null) {
+            sources = sources.replaceAt(selectedIndex) {
+                it.copy(detailPeaks = windowCached.data)
+            }
+            return@LaunchedEffect
+        }
         // Only the part of the file that the window shows is decoded. The
         // window may reach before the recording — the playhead stands in the
         // middle of the screen — and the time before the recording has no
@@ -597,8 +620,6 @@ fun EditorScreen(
             viewport = EditViewport(decodeStartMs, decodeSpanMs),
             totalMs = source.durationMs,
         ) ?: return@LaunchedEffect
-        val windowStart = decodeStartMs
-        val windowSpan = decodeSpanMs
         val start = range.first
         val end = range.last + 1
         val result = withContext(Dispatchers.IO) {
@@ -619,6 +640,12 @@ fun EditorScreen(
         }
         if (result is PeakDecoder.Result.Success) {
             sources = sources.replaceAt(selectedIndex) { it.copy(detailPeaks = result.data) }
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    PeaksCache.write(windowCacheFile, result.data, source.file)
+                }
+                PeaksCache.pruneWindows(context.filesDir)
+            }
         }
     }
 
@@ -862,6 +889,12 @@ fun EditorScreen(
             if (sources.size > 1) {
                 MergeOrderRow(
                     names = sources.map { it.displayName },
+                    // Every track says how long it is: ordering a merge is
+                    // ordering lengths, and a list of titles alone does not
+                    // tell the user which one they are about to move.
+                    lengths = sources.map { source ->
+                        formatDuration(source.keep.sumOf { it.endMs - it.startMs })
+                    },
                     selectedIndex = selectedIndex,
                     onMove = { from, delta ->
                         // The recording the user is looking at stays the one on
@@ -869,6 +902,16 @@ fun EditorScreen(
                         // the waveform under the playhead.
                         selectedIndex = EditOrder.destinationOf(sources, from, delta)
                         sources = EditOrder.move(sources, from, delta)
+                    },
+                    onRemove = { index ->
+                        // The recording itself stays in the library; only its
+                        // place in this merge goes away, and "插入音频" puts it
+                        // back (DESIGN §12.2).
+                        sources = sources.toMutableList().apply { removeAt(index) }
+                        selectedIndex = selectedIndex.coerceIn(0, sources.lastIndex)
+                        selectedSegment = null
+                        selectedMarkerMs = null
+                        playheadMs = 0L
                     },
                     onSelect = { index ->
                         val target = sources.getOrNull(index) ?: return@MergeOrderRow

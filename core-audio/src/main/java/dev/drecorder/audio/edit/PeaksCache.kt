@@ -32,6 +32,55 @@ object PeaksCache {
         File(cacheDirectory, "${recording.name}.peaks")
 
     /**
+     * The cache directory for **window** waveforms.
+     *
+     * A window waveform is the fine one decoded for the stretch that is on
+     * screen. It used to be decoded again on every visit — every pinch, every
+     * scroll back and every reopening of the editor started from the audio file
+     * again, which is what the user meant by "it loads the waveform every
+     * time". The files live in a subdirectory of their own so that pruning them
+     * can never delete a whole-recording cache.
+     */
+    fun windowDirectory(cacheDirectory: File): File = File(cacheDirectory, "lod")
+
+    /**
+     * The cache file for one window of [recording].
+     *
+     * Every part of the name is one of the things that make the waveform
+     * different: a window at another offset, another width or another
+     * resolution is another picture of the audio.
+     */
+    fun windowFileFor(
+        recording: File,
+        cacheDirectory: File,
+        bucketsPerSecond: Int,
+        startMs: Long,
+        spanMs: Long,
+    ): File = File(
+        windowDirectory(cacheDirectory),
+        "${recording.name}.$bucketsPerSecond.$startMs.$spanMs.peaks",
+    )
+
+    /**
+     * Keeps only the [keep] newest window caches.
+     *
+     * A zoom level and a scroll position are cheap to recreate but they are not
+     * free, and they multiply: without this the directory grows with every
+     * gesture for as long as the app is installed.
+     */
+    fun pruneWindows(cacheDirectory: File, keep: Int = 64) {
+        val directory = windowDirectory(cacheDirectory)
+        val files = directory.listFiles() ?: return
+        val stale = files
+            .filter { it.isFile }
+            .sortedByDescending { it.lastModified() }
+            .drop(keep)
+        for (file in stale) {
+            runCatching { file.delete() }
+        }
+    }
+
+    /**
      * Writes [data] to [file].
      *
      * The write goes to a temporary file that is renamed into place, so a

@@ -172,6 +172,7 @@
     <string name="editor_merge_order">合并顺序（从上往下依次播放）</string>
     <string name="editor_move_earlier">上移</string>
     <string name="editor_move_later">下移</string>
+    <string name="editor_remove_track">从合并里去掉这一轨</string>
     <string name="editor_restore_range_at">恢复 %1$s – %2$s</string>
     <string name="editor_delete_segment">删除 %1$s – %2$s（%3$s）</string>
     <string name="editor_delete_segment_none">删除两个切点之间的片段</string>
