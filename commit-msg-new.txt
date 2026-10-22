@@ -1,0 +1,8 @@
+删掉轨道模型换掉后不再被调用的代码
+
+- `MarkerBar` 与 `MergeOrderRow` 没有任何调用点（编辑页现在用轨道列表与
+  SegmentActionsRow），连同只为它们存在的 editor_* 字符串一起删；
+  `MarkerBar.kt` 改名 `SegmentActions.kt`，只留被用到的那个 composable。
+- `PeakDecodeGate` 及其测试删掉：按窗口反复精解码的机制已经不存在，
+  波形按片段合成整轨，一次解码一份录音。
+- 288 个单测全绿，`:app:assembleDebug` 通过。

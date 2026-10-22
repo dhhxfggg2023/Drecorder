@@ -1,17 +1,17 @@
 ﻿{
-    "versionCode":  11,
-    "versionName":  "0.3.1",
+    "versionCode":  12,
+    "versionName":  "0.3.2",
     "minSupportedVersionCode":  1,
-    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.1/drecorder-0.3.1.apk",
+    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.2/drecorder-0.3.2.apk",
     "mirrors":  [
-                    "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.1/drecorder-0.3.1.apk",
-                    "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.1/drecorder-0.3.1.apk",
-                    "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.1/drecorder-0.3.1.apk"
+                    "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.2/drecorder-0.3.2.apk",
+                    "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.2/drecorder-0.3.2.apk",
+                    "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.2/drecorder-0.3.2.apk"
                 ],
-    "sizeBytes":  53076380,
-    "sha256":  "044e76086360aafc675d65a047166e00a74db0eebb8f08f5763e7c3832259a3e",
+    "sizeBytes":  53035256,
+    "sha256":  "5e8421ebd5ecd62687d78e4d5674744fa4fc9819f9277ff17701fc9853aff2c2",
     "signingCertSha256":  "4f070db7fd59b883e7ab771f88cda4bc80ce3b97e1defcf9e7faeab5a496a348",
-    "publishedAt":  "2026-10-22T05:43:59Z",
-    "releaseNotes":  "编辑页改成单轨：重复一段音频不再多出一条轨道；合并顺序在轨道列表里调；插入的音频落在播放头处。播放从红色光标处开始，波形跟着播放滚动。",
+    "publishedAt":  "2026-10-22T07:11:15Z",
+    "releaseNotes":  "内部清理：删掉轨道模型换掉后不再被调用的旧编辑器代码与字符串。行为与 v0.3.1 一致。",
     "force":  false
 }
