@@ -1,17 +1,17 @@
 ﻿{
-    "versionCode":  12,
-    "versionName":  "0.3.0",
+    "versionCode":  11,
+    "versionName":  "0.3.1",
     "minSupportedVersionCode":  1,
-    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.0/drecorder-0.3.0.apk",
+    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.1/drecorder-0.3.1.apk",
     "mirrors":  [
-                    "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.0/drecorder-0.3.0.apk",
-                    "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.0/drecorder-0.3.0.apk",
-                    "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.0/drecorder-0.3.0.apk"
+                    "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.1/drecorder-0.3.1.apk",
+                    "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.1/drecorder-0.3.1.apk",
+                    "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.1/drecorder-0.3.1.apk"
                 ],
-    "sizeBytes":  53092764,
-    "sha256":  "d1f8e8722c1731b20a8386234d7cb82bf2318fba021705a7ce26b392f9501116",
+    "sizeBytes":  53076380,
+    "sha256":  "044e76086360aafc675d65a047166e00a74db0eebb8f08f5763e7c3832259a3e",
     "signingCertSha256":  "4f070db7fd59b883e7ab771f88cda4bc80ce3b97e1defcf9e7faeab5a496a348",
-    "publishedAt":  "2026-10-22T02:19:44Z",
-    "releaseNotes":  "播放：不再被跟随循环拽回开头，按播放会从红色光标处开始；切点：加切点不再连带选中旁边一段，区间只有点了才算选中；导出：对话框主按钮改为「覆盖原录音」，以前主按钮是「另存为」，想覆盖反而多出一个更短的录音；配色：撤回上一版的全局深色，恢复原来的固定配色。",
+    "publishedAt":  "2026-10-22T05:43:59Z",
+    "releaseNotes":  "编辑页改成单轨：重复一段音频不再多出一条轨道；合并顺序在轨道列表里调；插入的音频落在播放头处。播放从红色光标处开始，波形跟着播放滚动。",
     "force":  false
 }
