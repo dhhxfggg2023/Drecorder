@@ -1,6 +1,12 @@
 package dev.drecorder.ui.home
 
 import android.app.KeyguardManager
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -44,6 +50,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -242,8 +251,14 @@ fun HomeScreen(
 }
 
 /**
- * The one button: 閳?idle, 閳?recording. Colour and shape carry the state, and a tap
+ * The one button: idle, or recording. Colour and shape carry the state, and a tap
  * always does the obvious thing for that state.
+ *
+ * It sits inside a halo that breathes on its own time. The screen is otherwise
+ * almost empty — one button, one line of text — and a flat disc on a near-black
+ * background reads as a placeholder; the slow pulse is what makes the button
+ * look alive and, while recording, look live. It is the only motion on the
+ * screen, so it never competes with the elapsed time.
  */
 @Composable
 private fun DeckButton(recording: Boolean, onClick: () -> Unit) {
@@ -257,29 +272,54 @@ private fun DeckButton(recording: Boolean, onClick: () -> Unit) {
     } else {
         MaterialTheme.colorScheme.onPrimary
     }
+    val halo by rememberInfiniteTransition(label = "halo").animateFloat(
+        initialValue = 0.16f,
+        targetValue = 0.38f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1_800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "haloAlpha",
+    )
     Box(
         modifier = Modifier
-            .padding(4.dp)
-            .size(112.dp)
-            .clip(CircleShape)
-            .background(container)
-            .clickable(onClick = onClick),
+            .size(184.dp)
+            .drawBehind {
+                val radius = size.minDimension / 2f
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(container.copy(alpha = halo), Color.Transparent),
+                        center = center,
+                        radius = radius,
+                    ),
+                    radius = radius,
+                )
+            },
         contentAlignment = Alignment.Center,
     ) {
-        if (recording) {
-            Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(content),
-            )
-        } else {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(content),
-            )
+        Box(
+            modifier = Modifier
+                .size(112.dp)
+                .clip(CircleShape)
+                .background(container)
+                .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (recording) {
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(content),
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(content),
+                )
+            }
         }
     }
 }

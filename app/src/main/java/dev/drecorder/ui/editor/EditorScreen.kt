@@ -770,7 +770,13 @@ fun EditorScreen(
                                 R.string.editor_kept_length,
                                 formatDuration(plan.keptDurationMs),
                             ),
-                            style = MaterialTheme.typography.labelMedium,
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                // Tabular digits: this line counts down while
+                                // audio is cut, and a proportional "1" makes the
+                                // whole title row twitch on every tick.
+                                fontFeatureSettings = "tnum",
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 },

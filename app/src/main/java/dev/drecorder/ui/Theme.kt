@@ -4,14 +4,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.isSystemInDarkTheme
 
 /**
  * One look for every screen.
@@ -88,58 +86,86 @@ private val DrecorderTypography = Typography(
     ),
 )
 
-/** Slightly rounder than stock, matching the tonal surfaces used on every screen. */
+/** Rounder than stock: a dark surface reads as a card only when its corners are soft. */
 private val DrecorderShapes = Shapes(
-    extraSmall = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
-    small = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
-    medium = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
-    large = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
-    extraLarge = androidx.compose.foundation.shape.RoundedCornerShape(28.dp),
+    extraSmall = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
+    small = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+    medium = androidx.compose.foundation.shape.RoundedCornerShape(20.dp),
+    large = androidx.compose.foundation.shape.RoundedCornerShape(28.dp),
+    extraLarge = androidx.compose.foundation.shape.RoundedCornerShape(36.dp),
 )
 
 /**
- * Dynamic colour on Android 12+, a calm teal fallback elsewhere. The fallback exists
- * because a recording app has exactly one action and a grey-violet default scheme
- * gives it no emphasis.
+ * The palette: a dark studio, not a system-themed app.
+ *
+ * One near-black blue for the background, one step lighter for anything that
+ * sits on it, and exactly one accent that means "the live thing" — the record
+ * button, the playhead, the track that is on screen. A recording app is mostly
+ * an empty screen with one button and a waveform, so the empty screen has to
+ * read as deliberate rather than unfinished, and the accent has to be the only
+ * saturated colour on it.
+ *
+ * Deliberately not Material You and deliberately not light: a wallpaper-derived
+ * scheme hands the one action a different colour on every phone, and a light
+ * background puts a bright rectangle behind a dark waveform (user choice,
+ * 2026-10-22).
  */
-private val FallbackLight = lightColorScheme(
-    primary = androidx.compose.ui.graphics.Color(0xFF00696E),
-    onPrimary = androidx.compose.ui.graphics.Color(0xFFFFFFFF),
-    primaryContainer = androidx.compose.ui.graphics.Color(0xFF9CF1F6),
-    onPrimaryContainer = androidx.compose.ui.graphics.Color(0xFF002022),
-    secondaryContainer = androidx.compose.ui.graphics.Color(0xFFD4E8E9),
-    onSecondaryContainer = androidx.compose.ui.graphics.Color(0xFF0E1F20),
-    surface = androidx.compose.ui.graphics.Color(0xFFF7FAFA),
-    surfaceVariant = androidx.compose.ui.graphics.Color(0xFFE3EAEA),
-    onSurfaceVariant = androidx.compose.ui.graphics.Color(0xFF3F4949),
-    error = androidx.compose.ui.graphics.Color(0xFFBA1A1A),
-)
+private val Ink = androidx.compose.ui.graphics.Color(0xFF070A10)
+private val InkRaised = androidx.compose.ui.graphics.Color(0xFF10151F)
+private val InkLine = androidx.compose.ui.graphics.Color(0xFF1E2635)
+private val Accent = androidx.compose.ui.graphics.Color(0xFF4DA3FF)
+private val AccentDeep = androidx.compose.ui.graphics.Color(0xFF12263A)
+private val Mint = androidx.compose.ui.graphics.Color(0xFF35D6C0)
+private val TextHigh = androidx.compose.ui.graphics.Color(0xFFE9F0FA)
+private val TextLow = androidx.compose.ui.graphics.Color(0xFF8C9CB4)
 
-private val FallbackDark = darkColorScheme(
-    primary = androidx.compose.ui.graphics.Color(0xFF80D4DA),
-    onPrimary = androidx.compose.ui.graphics.Color(0xFF003739),
-    primaryContainer = androidx.compose.ui.graphics.Color(0xFF004F53),
-    onPrimaryContainer = androidx.compose.ui.graphics.Color(0xFF9CF1F6),
-    secondaryContainer = androidx.compose.ui.graphics.Color(0xFF324B4D),
-    onSecondaryContainer = androidx.compose.ui.graphics.Color(0xFFD4E8E9),
-    surface = androidx.compose.ui.graphics.Color(0xFF0E1515),
-    surfaceVariant = androidx.compose.ui.graphics.Color(0xFF3F4949),
-    onSurfaceVariant = androidx.compose.ui.graphics.Color(0xFFBEC9C9),
+private val StudioColorScheme = darkColorScheme(
+    primary = Accent,
+    onPrimary = androidx.compose.ui.graphics.Color(0xFF04121F),
+    primaryContainer = AccentDeep,
+    onPrimaryContainer = androidx.compose.ui.graphics.Color(0xFFCFE4FF),
+    secondary = Mint,
+    onSecondary = androidx.compose.ui.graphics.Color(0xFF00201C),
+    secondaryContainer = androidx.compose.ui.graphics.Color(0xFF1B2533),
+    onSecondaryContainer = TextHigh,
+    tertiary = Mint,
+    onTertiary = androidx.compose.ui.graphics.Color(0xFF00201C),
+    background = Ink,
+    onBackground = TextHigh,
+    surface = Ink,
+    onSurface = TextHigh,
+    surfaceVariant = InkLine,
+    onSurfaceVariant = TextLow,
+    surfaceContainerLowest = Ink,
+    surfaceContainerLow = InkRaised,
+    surfaceContainer = InkRaised,
+    surfaceContainerHigh = InkLine,
+    surfaceContainerHighest = androidx.compose.ui.graphics.Color(0xFF232D3D),
+    outline = androidx.compose.ui.graphics.Color(0xFF2A3546),
+    outlineVariant = InkLine,
+    error = androidx.compose.ui.graphics.Color(0xFFFF5A5F),
+    onError = androidx.compose.ui.graphics.Color(0xFF2A0507),
+    errorContainer = androidx.compose.ui.graphics.Color(0xFF3A1114),
+    onErrorContainer = androidx.compose.ui.graphics.Color(0xFFFFD9DA),
+    inverseSurface = TextHigh,
+    inverseOnSurface = Ink,
+    scrim = androidx.compose.ui.graphics.Color(0xFF000000),
 )
 
 @Composable
 fun DrecorderTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean = true,
     content: @Composable () -> Unit,
 ) {
-    // Deliberately not dynamic colour: the app has exactly one primary action, and a
-    // wallpaper-derived scheme can hand it a low-contrast, muddy colour pair. The fixed
-    // teal scheme keeps "start recording" recognisable across devices (user choice,
-    // 2026-10-18).
-    val colorScheme = if (darkTheme) FallbackDark else FallbackLight
+    // The app is dark, always. The parameter is kept so a caller can be
+    // explicit, but there is one scheme: a "studio" whose colours flip with the
+    // system is two designs to keep in step, and the waveform, the playhead and
+    // the record button are all tuned against this one (user choice, 2026-10-22).
+    @Suppress("UNUSED_PARAMETER")
+    val scheme = StudioColorScheme
 
     MaterialTheme(
-        colorScheme = colorScheme,
+        colorScheme = scheme,
         typography = DrecorderTypography,
         shapes = DrecorderShapes,
         content = content,

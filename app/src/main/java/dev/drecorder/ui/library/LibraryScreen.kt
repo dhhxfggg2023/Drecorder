@@ -283,7 +283,16 @@ fun LibraryScreen(
 
                 else -> LazyColumn(
                     modifier = Modifier.fillMaxSize().navigationBarsPadding(),
-                    contentPadding = PaddingValues(vertical = 4.dp),
+                    // Cards rather than a flat list: on a near-black background a
+                    // recording is a surface with an edge, and the gap between
+                    // two of them is what says "these are separate things".
+                    contentPadding = PaddingValues(
+                        start = 12.dp,
+                        end = 12.dp,
+                        top = 8.dp,
+                        bottom = 12.dp,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     items(items = recordings, key = { it.displayName }) { recording ->
                         RecordingRow(
@@ -491,14 +500,23 @@ private fun RecordingRow(
     var menuVisible by remember { mutableStateOf(false) }
     var dragValue by remember(recording.displayName) { mutableStateOf<Float?>(null) }
 
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = if (selectionMode) onToggleSelect else onTogglePlay)
-            .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    Surface(
+        color = if (selected) {
+            MaterialTheme.colorScheme.secondaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerLow
+        },
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
     ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = if (selectionMode) onToggleSelect else onTogglePlay)
+                .padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
         if (selectionMode) {
             Checkbox(checked = selected, onCheckedChange = { onToggleSelect() })
         } else {
@@ -642,6 +660,7 @@ private fun RecordingRow(
                     )
                 }
             }
+        }
         }
     }
 }
