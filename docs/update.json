@@ -1,17 +1,17 @@
 ﻿{
-    "versionCode":  17,
-    "versionName":  "0.3.7",
+    "versionCode":  18,
+    "versionName":  "0.3.8",
     "minSupportedVersionCode":  1,
-    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.7/drecorder-0.3.7.apk",
+    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.8/drecorder-0.3.8.apk",
     "mirrors":  [
-                    "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.7/drecorder-0.3.7.apk",
-                    "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.7/drecorder-0.3.7.apk",
-                    "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.7/drecorder-0.3.7.apk"
+                    "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.8/drecorder-0.3.8.apk",
+                    "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.8/drecorder-0.3.8.apk",
+                    "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.8/drecorder-0.3.8.apk"
                 ],
-    "sizeBytes":  53054332,
-    "sha256":  "94d929a091ade1caae05bdbb5ffd9c49d0df9d2533adb168b956a57147d26c43",
+    "sizeBytes":  53070716,
+    "sha256":  "6e2fc21a82437f62bdcfec705b4026c8a32cce6af3d4248ced702fdbeb89267a",
     "signingCertSha256":  "4f070db7fd59b883e7ab771f88cda4bc80ce3b97e1defcf9e7faeab5a496a348",
-    "publishedAt":  "2026-10-23T01:41:32Z",
-    "releaseNotes":  "红线恢复为固定不动：播放时每帧按播放头重新摆放窗口，波形从红线下滑过，不再整页跳。\n拖动波形只移动时间轴，红线留在你把它停下的位置；点某处红线落到手指下，波形不跳。\n波形柱子改成锚定在录音时间轴上，移动时不再抖动。",
+    "publishedAt":  "2026-10-23T06:56:49Z",
+    "releaseNotes":  "红线永远钉在屏幕正中：播放时波形从红线下滑过，拖动和缩放都不会把线挪走。\n拖动波形就是把音频推过去，红线下面换成另一刻的声音；播放中松手，声音会跟到那一刻。\n波形改成连续的一片（不再是分离的柱子），高度收成一条带，不再挤满整页。\n打开时一屏 12 秒（原来 30 秒太长），捏合可以细到 2 秒、粗到整段。\n甩一下会继续滑一段再慢慢停下。",
     "force":  false
 }
