@@ -3,106 +3,109 @@ package dev.drecorder.audio.edit
 import kotlin.math.roundToLong
 
 /**
- * The window that follows the playhead.
+ * The timeline's cursor: where the red line is, and what follows it.
  *
- * One rule decides everything here: **the red line does not move — the audio
- * does.** While the recording plays, the window is derived from the playhead
- * and the line's place on the screen, so the line stands at the same pixel from
- * the first frame to the last and the waveform slides under it. The user has
- * said this twice (2026-10-21 「红色的那个线应该在中间固定不动」, 2026-10-23
- * 「光标不能移动的禁令」), and a page that scrolls in jumps breaks it: the line
- * sweeps across the screen, then snaps back, and the audio stands still until
- * it does. So there is no dead zone, no "scroll when it touches the edge", and
- * no step at all — [followed] is called every frame and always answers with the
- * window the line implies.
+ * One rule decides everything here: **the red line stands in the middle of the
+ * screen and does not move — the audio slides under it.** The user has said so
+ * three times (2026-10-21 「红色的那个线应该在中间固定不动」, 2026-10-23
+ * 「光标不能移动的禁令」, 2026-10-23 「红色光标固定在屏幕中间，不要动」), so the
+ * window is not a piece of state at all: it is [window], derived from the
+ * moment and the zoom. There is no dead zone, no "scroll when the line touches
+ * the edge", and nothing to jump back from.
  *
- * The line is at the middle unless the user puts it elsewhere. A drag moves the
- * waveform and nothing else (it never changes the moment the line is on), so
- * the place the line ends up at is read back with [lineFraction] and playback
- * then keeps it there. Re-centring the line after a drag would undo the gesture
- * that just moved the window, which is the one thing a gesture handler must not
- * do (m03765).
+ * The consequence, and the reason the model is this small: **the audio under
+ * the line is always the moment playback is at.** Dragging the waveform
+ * therefore changes the moment — the line keeps its pixel, so scrolling the
+ * content under it is what changes the time — and so does pinching, because
+ * the same moment has to stay under the line. A gesture never moves the line;
+ * it moves the time.
  *
- * Nothing here clamps the window to the recording's length: the line can stand
- * in the middle of the screen at the first sample, and the time before the
- * recording started shows as empty space. That empty half is not a bug — it is
- * what keeps the line still from the very first frame.
- *
- * Pure and Android-free, so it can be unit-tested off-device.
+ * Pure and Android-free, so all of it can be unit-tested off-device.
  */
 object EditFollow {
 
-    /**
-     * The fraction of the width the playhead is anchored at.
-     *
-     * The middle of the screen. Half, not three quarters: a line that is not
-     * in the middle is a line the user did not put there.
-     */
+    /** The fraction of the width the red line stands at. The middle. */
     const val ANCHOR_FRACTION = 0.5f
 
     /**
-     * The window that puts [playheadMs] at [lineFraction] of the width.
+     * The narrowest window the user can zoom into.
      *
-     * This is what a frame of playback asks for. It is deliberately not
-     * clamped: a window that is pushed back inside the recording would move
-     * the line, which is the thing this function exists to prevent.
-     *
-     * @param playheadMs the moment that must stand at [lineFraction]
-     * @param spanMs how much of the recording is on screen
-     * @param lineFraction where on the screen the line stands; 0.5 = middle
+     * Two seconds is about the length of a pause between two sentences, which
+     * is the finest distinction the cut points of a conversation need.
      */
-    fun followed(
-        playheadMs: Long,
-        spanMs: Long,
-        lineFraction: Float = ANCHOR_FRACTION,
-    ): EditViewport {
+    const val MIN_SPAN_MS = 2_000L
+
+    /**
+     * The window that shows [playheadMs] under the line.
+     *
+     * The window may reach before the recording or past its end — the line at
+     * the first sample leaves the left half of the screen empty — and that is
+     * the price of a line that never moves. It is not clamped: a window pushed
+     * back inside the recording would move the line, which is the thing this
+     * function exists to prevent.
+     */
+    fun window(playheadMs: Long, spanMs: Long): EditViewport {
         val span = spanMs.coerceAtLeast(1L)
         return EditViewport(
-            startMs = playheadMs - (span * sane(lineFraction)).toLong(),
+            startMs = playheadMs - (span * ANCHOR_FRACTION).toLong(),
             spanMs = span,
         )
     }
 
     /**
-     * Where the line stands on the screen in [current].
+     * The cursor after the waveform was dragged by [deltaMs].
      *
-     * Read after a gesture that moved the window: the line is a moment on the
-     * recording, so the window says where that moment is on screen, and that
-     * place is what playback has to keep from then on. A moment outside the
-     * window is answered with the nearest edge — the line is off screen, and
-     * the edge is the direction it went.
+     * Dragging the content by one window of time changes the moment under the
+     * line by the same amount: the audio moved, the line did not. The moment is
+     * held inside the recording, because it is a moment of the recording —
+     * there is nothing to listen to before the first sample or after the last.
      */
-    fun lineFraction(current: EditViewport, playheadMs: Long): Float {
-        if (current.spanMs <= 0L) return ANCHOR_FRACTION
-        val fraction = (playheadMs - current.startMs).toFloat() / current.spanMs.toFloat()
-        if (fraction.isNaN()) return ANCHOR_FRACTION
-        return fraction.coerceIn(0f, 1f)
+    fun scrubbed(cursor: EditCursor, deltaMs: Long, totalMs: Long): EditCursor {
+        val total = totalMs.coerceAtLeast(1L)
+        return EditCursor(
+            playheadMs = (cursor.playheadMs + deltaMs).coerceIn(0L, total),
+            spanMs = cursor.spanMs.coerceIn(MIN_SPAN_MS.coerceAtMost(total), total),
+        )
     }
 
+    /** The cursor after the user asked to hear from [atMs] (a tap, a jump). */
+    fun seeked(cursor: EditCursor, atMs: Long, totalMs: Long): EditCursor =
+        scrubbed(cursor, atMs - cursor.playheadMs, totalMs)
+
     /**
-     * The window after the finger dragged the waveform by [deltaMs].
+     * The cursor after one zoom/pan gesture.
      *
-     * Dragging scrolls the timeline: the content moves with the finger and the
-     * window moves by the same amount of time. The playhead is **not** touched
-     * — it is a moment on the recording, and scrolling does not change where
-     * the recording is (m00678).
+     * The pinch zooms **about the line**: the moment being listened to stays
+     * under the line and the audio is stretched around it. Zooming about the
+     * fingers instead would change which moment the player is at while the user
+     * is only trying to look closer, and the line is the one thing that must
+     * not move on its own (2026-10-23).
      *
-     * The window is not stopped at the first and last sample of the recording —
-     * it may be dragged a whole window past either end, leaving empty space. A
-     * timeline that dies at the edge it happens to be near reads as broken, and
-     * that is what 「波形滑动太死」 was: the recording's length, not the cursor,
-     * decided whether the waveform could still move (m00678).
+     * @param cursor the cursor before the gesture
+     * @param totalMs the length of the recording being viewed
+     * @param zoomFactor how much the user pinched; greater than 1 zooms in
+     * @param panFraction how far the user dragged, as a fraction of the width
      */
-    fun panned(current: EditViewport, deltaMs: Long, totalMs: Long): EditViewport {
-        val span = current.spanMs.coerceAtLeast(1L)
-        val total = totalMs.coerceAtLeast(0L)
-        // One full window of empty space on each side: enough that the very
-        // first and very last moment can be pulled to the middle of the screen,
-        // bounded so the recording cannot be scrolled out of sight entirely.
-        val minStart = -span
-        val maxStart = (total - 1L).coerceAtLeast(0L)
-        return EditViewport(
-            startMs = (current.startMs + deltaMs).coerceIn(minStart, maxStart),
+    fun zoomed(
+        cursor: EditCursor,
+        totalMs: Long,
+        zoomFactor: Float,
+        panFraction: Float,
+    ): EditCursor {
+        val total = totalMs.coerceAtLeast(1L)
+        // A recording shorter than the minimum span cannot be zoomed into, and
+        // the minimum must not be larger than the recording itself.
+        val minSpan = MIN_SPAN_MS.coerceAtMost(total)
+        val factor = if (zoomFactor.isNaN() || zoomFactor <= 0f) 1f else zoomFactor
+        val span = (cursor.spanMs / factor)
+            .coerceIn(minSpan.toFloat(), total.toFloat())
+            .toLong()
+        // Two fingers moving together scroll the timeline exactly like one
+        // finger does: the moment changes, the zoom does not.
+        val playhead = cursor.playheadMs - (panFraction * span).toLong()
+
+        return EditCursor(
+            playheadMs = playhead.coerceIn(0L, total),
             spanMs = span,
         )
     }
@@ -111,8 +114,7 @@ object EditFollow {
      * How many milliseconds one pixel covers in a window of [spanMs].
      *
      * Used to turn a touch target measured in pixels into a time range, so
-     * that a marker is as easy to hit when the whole recording is on screen
-     * as when two seconds of it are.
+     * that a cut point is as easy to hit at every zoom level.
      */
     fun msPerPixel(spanMs: Long, widthPx: Float): Long {
         if (widthPx <= 0f || spanMs <= 0L) return 0L
@@ -123,15 +125,11 @@ object EditFollow {
      * How many milliseconds a movement of [pixels] covers in a window of
      * [spanMs].
      *
-     * The drag of the waveform is measured with this: the finger moves, and
-     * the recording is scrolled by the same amount of time (DESIGN §12.4).
+     * Also what a fling is measured with: the velocity of the finger in pixels
+     * per second becomes the time the timeline keeps scrolling per second.
      */
     fun pixelsToMs(pixels: Float, spanMs: Long, widthPx: Float): Long {
         if (widthPx <= 0f || spanMs <= 0L) return 0L
         return (pixels.toDouble() / widthPx.toDouble() * spanMs.toDouble()).roundToLong()
     }
-
-    /** A fraction that can be used as a position: not NaN, inside the width. */
-    private fun sane(fraction: Float): Float =
-        if (fraction.isNaN()) ANCHOR_FRACTION else fraction.coerceIn(0f, 1f)
 }

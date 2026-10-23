@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextMeasurer
@@ -54,9 +55,10 @@ import kotlin.math.roundToLong
  * to it, and dragging it moves the recording under the finger (DESIGN §12.4).
  *
  * Gestures:
- * - one finger drags the timeline: the audio moves with the finger, and the
- *   window may be dragged a whole window past either end of the recording;
- * - a tap picks the moment under the finger *and* the stretch around it;
+ * - one finger drags the timeline: the audio moves with the finger, and a flick
+ *   keeps it moving and slowing down after the finger lifts;
+ * - a tap says where to listen from — the red line cannot move, so the audio
+ *   scrolls until the tapped moment stands under it;
  * - a tap on a cut point picks that cut point;
  * - two fingers zoom and pan.
  *
@@ -64,8 +66,9 @@ import kotlin.math.roundToLong
  * pinch that only works inside a strip a few hundred pixels tall is a pinch the
  * user cannot find (m00678).
  *
- * There is no gesture that drags the playhead itself: a drag moves the
- * recording, a tap says where to listen from.
+ * There is no gesture that drags the playhead itself: the line is pinned to the
+ * middle of the screen and a drag moves the recording under it (2026-10-23
+ * 「红色光标固定在屏幕中间，不要动」).
  *
  * There is no gesture that drags a cut point either: a cut point is a decision
  * the user made about where the audio should be divided, and a finger that
@@ -89,11 +92,13 @@ fun WaveformView(
     onTimelineDrag: (windowDeltaMs: Long) -> Unit,
     onMarkerSelect: (ms: Long) -> Unit = {},
     onSegmentTap: (timeMs: Long) -> Unit = {},
-    onViewportGesture: (zoomFactor: Float, panFraction: Float, focusFraction: Float) -> Unit,
+    onViewportGesture: (zoomFactor: Float, panFraction: Float) -> Unit,
     onDraggingChanged: (dragging: Boolean) -> Unit = {},
+    /** How fast the timeline should keep scrolling after the finger lifts, in ms/s. */
+    onFling: (velocityMsPerSecond: Float) -> Unit = {},
     modifier: Modifier = Modifier,
     /** A fixed height, or null to take whatever height the parent offers. */
-    height: Dp? = 240.dp,
+    height: Dp? = 200.dp,
     waveColor: Color = Color(0xFF3D7EFF),
     removedColor: Color = Color(0xFF9AA0A6),
     rulerColor: Color = Color(0x66000000),
@@ -106,12 +111,12 @@ fun WaveformView(
     val textMeasurer = rememberTextMeasurer()
     var widthPx by remember { mutableIntStateOf(0) }
 
-    // The bars are drawn a few pixels apart with round caps, so one column of
-    // the binning is one *bar*, not one pixel-wide sliver: a wall of 1-pixel
-    // lines reads as a solid rectangle, which is what the user called "矩形方块，
-    // 不好看" (m00678).
-    val barStepPx = with(LocalDensity.current) { BAR_STEP.toPx() }
-    val barWidthPx = with(LocalDensity.current) { BAR_WIDTH.toPx() }
+    // One column of the binning is one *pixel*, and the columns are filled as a
+    // single continuous outline: a waveform, not a fence. The old drawing put a
+    // capsule every 4 dp with a gap between them, which the user described as
+    // 「离散图像」 (a picture made of separate pieces) — bars you can count are
+    // not a waveform (2026-10-23).
+    val columnStepPx = 1f
 
     // The gesture callback runs the whole time a finger is down, and the
     // gestures change the viewport *while* they run. Reading these through
@@ -127,34 +132,31 @@ fun WaveformView(
     val segmentTap by rememberUpdatedState(onSegmentTap)
     val viewportGesture by rememberUpdatedState(onViewportGesture)
     val draggingChanged by rememberUpdatedState(onDraggingChanged)
+    val fling by rememberUpdatedState(onFling)
 
-    // The bars are anchored to the **recording's** time grid, not to the screen:
-    // one bar is one slice of audio, fixed, and the whole row is translated by
-    // the fraction of a bar the window has scrolled past. Binning them to the
-    // screen instead re-groups the same audio into different bars on every
-    // frame, so every bar changes height as it travels and the waveform
-    // shimmers — which is the difference between "the audio slides" and
-    // 「手感很烂，波形移动的时候」. The heights now only change when the window has
-    // moved a whole bar, by which time the bars are the same picture shifted by
-    // exactly one bar. The maths is in core-audio and unit-tested off-device.
-    val barsAcross = if (widthPx > 0) {
-        (widthPx / barStepPx).toInt().coerceAtLeast(1)
-    } else {
-        1
-    }
-    val barMs = if (spanMs > 0L) (spanMs / barsAcross).coerceAtLeast(1L) else 1L
-    val alignedStartMs = WaveformBins.gridStart(startMs, barMs)
-    val columns = remember(peaks, alignedStartMs, barMs, barsAcross, widthPx) {
+    // The columns are anchored to the **recording's** time grid, not to the
+    // screen: one column is one slice of audio, fixed, and the whole outline is
+    // translated by the fraction of a column the window has scrolled past.
+    // Binning them to the screen instead re-groups the same audio into
+    // different columns on every frame, so every column changes height as it
+    // travels and the waveform shimmers — which is part of 「手感很烂，波形移动的
+    // 时候」. The heights now only change when the window has moved a whole
+    // column, by which time the columns are the same picture shifted by exactly
+    // one column. The maths is in core-audio and unit-tested off-device.
+    val columnsAcross = if (widthPx > 0) widthPx else 1
+    val columnMs = if (spanMs > 0L) (spanMs / columnsAcross).coerceAtLeast(1L) else 1L
+    val alignedStartMs = WaveformBins.gridStart(startMs, columnMs)
+    val columns = remember(peaks, alignedStartMs, columnMs, columnsAcross, widthPx) {
         if (widthPx <= 0) {
             WaveformColumns.EMPTY
         } else {
-            // Two extra bars: one for the part scrolled off the left edge and
-            // one for the part that just came in on the right.
-            WaveformBins.buildBars(peaks, alignedStartMs, barMs, barsAcross + 2)
+            // Two extra columns: one for the part scrolled off the left edge
+            // and one for the part that just came in on the right.
+            WaveformBins.buildBars(peaks, alignedStartMs, columnMs, columnsAcross + 2)
         }
     }
-    // How far the window has scrolled into the first bar, in pixels.
-    val shiftPx = (startMs - alignedStartMs).toFloat() / barMs.toFloat() * barStepPx
+    // How far the window has scrolled into the first column, in pixels.
+    val shiftPx = (startMs - alignedStartMs).toFloat() / columnMs.toFloat() * columnStepPx
 
     Box(
         modifier = modifier
@@ -164,6 +166,13 @@ fun WaveformView(
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
+
+                    // What the finger was doing when it left is what a fling
+                    // is: a tracker over the last movements is the difference
+                    // between the timeline coasting and the timeline stopping
+                    // dead under the finger (「灵动性太差」, 2026-10-23).
+                    val tracker = VelocityTracker()
+                    tracker.addPosition(down.uptimeMillis, down.position)
 
                     // What the finger grabbed decides only what a *tap* means:
                     // a cut point, or the stretch around it. A drag always
@@ -188,23 +197,18 @@ fun WaveformView(
                             mode = GestureMode.TRANSFORM
                             val zoom = event.calculateZoom()
                             val pan = event.calculatePan()
-                            val centroid = event.calculateCentroid()
-                            val focus = if (currentWidth > 0) {
-                                (centroid.x / currentWidth.toFloat()).coerceIn(0f, 1f)
-                            } else {
-                                0.5f
-                            }
                             val panFraction = if (currentWidth > 0) {
                                 pan.x / currentWidth.toFloat()
                             } else {
                                 0f
                             }
-                            viewportGesture(zoom, panFraction, focus)
+                            viewportGesture(zoom, panFraction)
                             pressed.forEach { it.consume() }
                         } else {
                             val change = pressed.first()
                             val dx = change.position.x - lastX
                             lastX = change.position.x
+                            tracker.addPosition(change.uptimeMillis, change.position)
                             if (mode == GestureMode.UNDECIDED &&
                                 abs(change.position.x - down.position.x) > viewConfiguration.touchSlop
                             ) {
@@ -238,7 +242,22 @@ fun WaveformView(
                     // The editor has to know that the finger is down: while
                     // it is, the playhead does not drive the window, because
                     // the finger already does.
-                    if (mode == GestureMode.DRAG) draggingChanged(false)
+                    if (mode == GestureMode.DRAG) {
+                        draggingChanged(false)
+                        // The finger let go while still moving: the timeline
+                        // keeps going at that speed and slows down, the way a
+                        // scroll does everywhere else.
+                        val speedPxPerSecond = tracker.calculateVelocity().x
+                        if (abs(speedPxPerSecond) > FLING_MIN_SPEED_PX_PER_S) {
+                            fling(
+                                -EditFollow.pixelsToMs(
+                                    speedPxPerSecond,
+                                    currentSpan,
+                                    currentWidth.toFloat(),
+                                ).toFloat(),
+                            )
+                        }
+                    }
 
                     // A finger that went down and never moved is a tap. On a
                     // cut point it picks that cut point; on the audio it picks
@@ -326,32 +345,21 @@ fun WaveformView(
                 )
             }
 
-            // --- the waveform itself ---
-            if (columns.count > 0) {
-                for (i in 0 until columns.count) {
-                    val minV = columns.mins[i]
-                    val maxV = columns.maxs[i]
-                    if (minV == Int.MAX_VALUE) continue
-                    val top = midY - (maxV / 32768f) * halfHeight
-                    val bottom = midY - (minV / 32768f) * halfHeight
-                    // The bar grid is fixed to the recording, so the whole row
-                    // is shifted by the part of a bar the window is into.
-                    val x = i * barStepPx + barStepPx / 2f - shiftPx
-                    if (x < -barStepPx || x > size.width + barStepPx) continue
-                    // Rounded caps: a capsule per column, so the waveform reads
-                    // as a waveform and not as a row of rectangles (m00678).
-                    drawRoundRect(
-                        color = waveColor,
-                        topLeft = Offset(x - barWidthPx / 2f, top.coerceAtMost(bottom)),
-                        size = Size(
-                            barWidthPx,
-                            (bottom.coerceAtLeast(top) - top.coerceAtMost(bottom))
-                                .coerceAtLeast(barWidthPx),
-                        ),
-                        cornerRadius = CornerRadius(barWidthPx / 2f),
-                    )
-                }
-            }
+            // --- the waveform itself: one continuous envelope ---
+            //
+            // Drawn as a single filled outline rather than a row of separate
+            // capsules: the user asked for a continuous waveform, not a fence
+            // (「波形要连续，不要离散图像」, 2026-10-23). Per column the outline
+            // goes to the loudest and the quietest sample of that column, which
+            // is what a waveform is — the shape of the audio, not a decoration.
+            drawEnvelope(
+                columns = columns,
+                shiftPx = shiftPx,
+                columnStepPx = columnStepPx,
+                midY = midY,
+                halfHeight = halfHeight,
+                color = waveColor,
+            )
 
             // --- markers: the cut points ---
             for (marker in markers) {
@@ -425,16 +433,67 @@ private enum class GestureMode { UNDECIDED, DRAG, TRANSFORM }
 private const val MARKER_FLAG_PX = 24f
 
 /**
- * The distance between two waveform bars, in dp.
+ * How fast a finger has to be moving when it lifts to keep the timeline
+ * scrolling, in pixels per second.
  *
- * The gap is what makes the waveform a row of bars rather than a filled block:
- * at 4 dp apart with 2.5 dp of bar there is a visible channel between them at
- * every zoom level (m00678).
+ * Below this the gesture was a placement, not a throw: a slow drag that ends
+ * with the finger rolling off should leave the timeline where it was put.
  */
-private val BAR_STEP = 4.dp
+private const val FLING_MIN_SPEED_PX_PER_S = 120f
 
-/** How thick one bar is, in dp. Rounded by half its width at both ends. */
-private val BAR_WIDTH = 2.5.dp
+/**
+ * The waveform as one filled outline.
+ *
+ * Each column puts the top of the shape at its loudest sample and the bottom at
+ * its quietest, and consecutive columns are joined, so the result is a
+ * continuous shape rather than a row of separate bars (「波形要连续，不要离散图像」,
+ * 2026-10-23). Columns with no audio in them break the shape instead of being
+ * drawn as silence: past the end of the recording there is nothing to draw, and
+ * a flat line there would claim there is.
+ *
+ * Pure drawing: the column data and the shift are computed by the caller.
+ */
+private fun DrawScope.drawEnvelope(
+    columns: WaveformColumns,
+    shiftPx: Float,
+    columnStepPx: Float,
+    midY: Float,
+    halfHeight: Float,
+    color: Color,
+) {
+    if (columns.count == 0) return
+
+    fun fillRun(from: Int, to: Int) {
+        val path = Path()
+        for (index in from..to) {
+            val x = index * columnStepPx - shiftPx
+            val y = midY - (columns.maxs[index] / 32768f) * halfHeight
+            if (index == from) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        for (index in to downTo from) {
+            val x = index * columnStepPx - shiftPx
+            val y = midY - (columns.mins[index] / 32768f) * halfHeight
+            path.lineTo(x, y)
+        }
+        path.close()
+        drawPath(path, color)
+    }
+
+    var runStart = -1
+    var index = 0
+    while (index <= columns.count) {
+        val empty = index == columns.count || columns.mins[index] == Int.MAX_VALUE
+        if (empty) {
+            if (runStart >= 0) {
+                fillRun(runStart, index - 1)
+                runStart = -1
+            }
+        } else if (runStart < 0) {
+            runStart = index
+        }
+        index++
+    }
+}
 
 /**
  * The marker within reach of a touch, or null.

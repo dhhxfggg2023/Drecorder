@@ -6,7 +6,7 @@ import kotlin.math.roundToLong
  * The window of the recording the waveform is showing.
  *
  * The timeline always refers to the **original** file, not to the edited result,
- * so the viewport is expressed in source time (DESIGN §12.4).
+ * so the window is expressed in source time (DESIGN §12.4).
  *
  * @param startMs the first moment of the recording that is on screen
  * @param spanMs how much of the recording is on screen
@@ -21,76 +21,29 @@ data class EditViewport(
     /** The moment at [fraction] (0 = left edge, 1 = right edge) of the window. */
     fun timeAtFraction(fraction: Float): Long =
         startMs + (spanMs * fraction).roundToLong()
+
+    /** The moment in the middle of the window: where the red line stands. */
+    val anchorMs: Long get() = timeAtFraction(EditFollow.ANCHOR_FRACTION)
 }
 
 /**
- * The zoom and pan of the waveform window.
+ * The state of the timeline: which moment the red line is on, and how much of
+ * the recording is on screen.
  *
- * These are pure functions of the viewport, the length of the recording and the
- * gesture, so they can be unit-tested without a device — and they have to be:
- * a viewport that drifts out of the recording shows a waveform that does not
- * correspond to the audio, and a viewport that jumps to the wrong place after a
- * pinch is the difference between "feels right" and "broken".
+ * These two numbers are the whole viewport; the window is [window], derived and
+ * never stored. That is the point: the line is always in the middle of the
+ * screen, so there is no separate "where the window starts" that could end up
+ * disagreeing with it — which is how v0.3.6 let the line drift across the screen
+ * and then snap back (2026-10-23 「红色光标固定在屏幕中间，不要动」).
  *
- * The rules the result always satisfies:
- *
- *  - `spanMs` is between [MIN_SPAN_MS] and the length of the recording, so the
- *    window can never be empty or wider than the file;
- *  - `startMs` may be **negative**: the playhead stands in the middle of the
- *    screen, and the window therefore reaches into the time before the
- *    recording started (DESIGN §12.4). The window is never pushed so far
- *    that it no longer overlaps the recording;
- *  - the point the gesture focused on stays at the same place on screen.
+ * Dragging the waveform moves [playheadMs] and pinching changes [spanMs]; with
+ * only these two there is nothing for a gesture and the follow loop to fight
+ * over (m03765) — one gesture, one state.
  */
-object EditViewportMath {
-
-    /**
-     * The narrowest window the user can zoom into.
-     *
-     * Two seconds is about the length of a pause between two sentences, which is
-     * the finest distinction the cut points of a conversation need.
-     */
-    const val MIN_SPAN_MS = 2_000L
-
-    /**
-     * Applies one zoom/pan gesture to [current].
-     *
-     * @param current the window before the gesture
-     * @param totalMs the length of the recording being viewed
-     * @param zoomFactor how much the user pinched; greater than 1 zooms in
-     * @param panFraction how far the user dragged, as a fraction of the width
-     * @param focusFraction where the gesture happened, as a fraction of the width
-     */
-    fun apply(
-        current: EditViewport,
-        totalMs: Long,
-        zoomFactor: Float,
-        panFraction: Float,
-        focusFraction: Float,
-    ): EditViewport {
-        val total = totalMs.coerceAtLeast(1L)
-        // A recording shorter than the minimum span cannot be zoomed into, and
-        // the minimum must not be larger than the recording itself.
-        val minSpan = MIN_SPAN_MS.coerceAtMost(total)
-        val factor = if (zoomFactor.isNaN() || zoomFactor <= 0f) 1f else zoomFactor
-
-        val newSpan = (current.spanMs / factor)
-            .coerceIn(minSpan.toFloat(), total.toFloat())
-            .toLong()
-
-        // The point the user focused on keeps its place on screen: its time is
-        // read from the old window and the new window is placed around it.
-        val focus = focusFraction.coerceIn(0f, 1f)
-        val focusTime = current.timeAtFraction(focus)
-        var newStart = focusTime - (newSpan * focus).toLong()
-        newStart -= (panFraction * newSpan).toLong()
-
-        // The window may reach before the recording, but it must always
-        // overlap it: a window that shows nothing at all is not a window.
-        val maxStart = (total - newSpan).coerceAtLeast(0L)
-        return EditViewport(
-            startMs = newStart.coerceIn(-newSpan, maxStart),
-            spanMs = newSpan,
-        )
-    }
+data class EditCursor(
+    val playheadMs: Long,
+    val spanMs: Long,
+) {
+    /** The window this cursor shows: the line in the middle. */
+    val window: EditViewport get() = EditFollow.window(playheadMs, spanMs)
 }

@@ -29,38 +29,6 @@ object WaveformBins {
     const val MAX_COLUMNS = 4_096
 
     /**
-     * Bins the peaks covering `[startMs, startMs + spanMs)` into [widthPx]
-     * columns of the screen.
-     *
-     * This is the screen-anchored mapping: column *i* covers whatever audio
-     * falls in its slice of the window. While the window stands still that is
-     * the right answer; while it moves — playback, a drag — it re-bins the same
-     * audio into different columns on every frame, so the bars change height
-     * as they travel. A moving waveform wants [buildBars] instead.
-     *
-     * A column with no audio in it keeps the sentinel extremes, which the
-     * renderer draws as nothing — a silent stretch therefore shows as a flat
-     * line rather than as a gap.
-     */
-    fun build(
-        peaks: PeakData,
-        startMs: Long,
-        spanMs: Long,
-        widthPx: Int,
-    ): WaveformColumns {
-        val count = widthPx.coerceIn(1, MAX_COLUMNS)
-        if (spanMs <= 0) return WaveformColumns(count, emptyMins(count), emptyMaxs(count))
-
-        val msPerColumn = spanMs.toDouble() / count
-        return aggregate(
-            peaks = peaks,
-            count = count,
-            startOf = { index -> startMs + (index * msPerColumn).toLong() },
-            endOf = { index -> startMs + ((index + 1) * msPerColumn).toLong() },
-        )
-    }
-
-    /**
      * Bins [bars] bars of [barMs] each, starting at [firstBarStartMs].
      *
      * The bars are anchored to the **recording's** time grid, not to the
@@ -69,11 +37,13 @@ object WaveformBins {
      * translates the whole row by the fraction of a bar it has scrolled, so the
      * waveform slides smoothly while no bar changes height — which is what a
      * moving waveform has to look like (「手感很烂，波形移动的时候」,
-     * 2026-10-23). Re-binning per frame instead makes the bars shimmer.
+     * 2026-10-23). Re-binning per frame instead makes the bars shimmer, which is
+     * what the previous screen-anchored `build` did: it is gone rather than left
+     * unused, because a second way to bin the same audio is exactly the kind of
+     * two-owner problem this project has paid for before.
      *
      * [firstBarStartMs] must be a multiple of [barMs]'s grid for the bars to be
-     * stable; [EditFollow] leaves that arithmetic to the view, which knows the
-     * width.
+     * stable; [gridStart] is what produces it.
      */
     fun buildBars(
         peaks: PeakData,
