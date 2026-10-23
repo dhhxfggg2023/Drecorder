@@ -1,17 +1,17 @@
 ﻿{
-    "versionCode":  18,
-    "versionName":  "0.3.8",
+    "versionCode":  19,
+    "versionName":  "0.3.9",
     "minSupportedVersionCode":  1,
-    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.8/drecorder-0.3.8.apk",
+    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.9/drecorder-0.3.9.apk",
     "mirrors":  [
-                    "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.8/drecorder-0.3.8.apk",
-                    "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.8/drecorder-0.3.8.apk",
-                    "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.8/drecorder-0.3.8.apk"
+                    "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.9/drecorder-0.3.9.apk",
+                    "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.9/drecorder-0.3.9.apk",
+                    "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.9/drecorder-0.3.9.apk"
                 ],
     "sizeBytes":  53070716,
-    "sha256":  "6e2fc21a82437f62bdcfec705b4026c8a32cce6af3d4248ced702fdbeb89267a",
+    "sha256":  "e6a0f82a7a74a8883c611e6ef95f25b99c55b5a716ef7658512ef68b3cec0c1f",
     "signingCertSha256":  "4f070db7fd59b883e7ab771f88cda4bc80ce3b97e1defcf9e7faeab5a496a348",
-    "publishedAt":  "2026-10-23T06:56:49Z",
-    "releaseNotes":  "红线永远钉在屏幕正中：播放时波形从红线下滑过，拖动和缩放都不会把线挪走。\n拖动波形就是把音频推过去，红线下面换成另一刻的声音；播放中松手，声音会跟到那一刻。\n波形改成连续的一片（不再是分离的柱子），高度收成一条带，不再挤满整页。\n打开时一屏 12 秒（原来 30 秒太长），捏合可以细到 2 秒、粗到整段。\n甩一下会继续滑一段再慢慢停下。",
+    "publishedAt":  "2026-10-23T10:05:17Z",
+    "releaseNotes":  "这一版重点在「看起来真的在动」：\n\n- 播放时波形按屏幕刷新率逐帧滑动，不再一格一格跳：播放器报位置的间隔用帧时钟补齐，看不出停顿。\n- 页面不再每帧重画：芯片、按钮、时间刻度保持不动，只有波形在动，拖动和播放都更跟手。\n- 波形改成真正的声波样子：上下对称的连续包络 + 描边，不再是「一个个柱状图」。\n- 波形带子加高到 264dp，细节更清楚；打开时一屏 8 秒（原来 30 秒，太长）。\n- 合并的先后顺序现在能改了：录音芯片行末尾的「顺序」→ 前移 / 后移。\n- 红色光标仍然固定在屏幕正中，一像素都不动，波形在它下面滑过。",
     "force":  false
 }
