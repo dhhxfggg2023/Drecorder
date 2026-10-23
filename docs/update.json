@@ -1,17 +1,17 @@
 ﻿{
-    "versionCode":  16,
-    "versionName":  "0.3.6",
+    "versionCode":  17,
+    "versionName":  "0.3.7",
     "minSupportedVersionCode":  1,
-    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.6/drecorder-0.3.6.apk",
+    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.7/drecorder-0.3.7.apk",
     "mirrors":  [
-                    "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.6/drecorder-0.3.6.apk",
-                    "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.6/drecorder-0.3.6.apk",
-                    "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.6/drecorder-0.3.6.apk"
+                    "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.7/drecorder-0.3.7.apk",
+                    "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.7/drecorder-0.3.7.apk",
+                    "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.7/drecorder-0.3.7.apk"
                 ],
-    "sizeBytes":  53054336,
-    "sha256":  "ac2dfd9ebab182aa43f34bb25e6e660dd4ebaf1d61a5ee903b2716ad5738bd6f",
+    "sizeBytes":  53054332,
+    "sha256":  "94d929a091ade1caae05bdbb5ffd9c49d0df9d2533adb168b956a57147d26c43",
     "signingCertSha256":  "4f070db7fd59b883e7ab771f88cda4bc80ce3b97e1defcf9e7faeab5a496a348",
-    "publishedAt":  "2026-10-22T14:24:16Z",
-    "releaseNotes":  "Preview is now an ordinary playlist of clipped media items on the same ExoPlayer the library uses, so editing playback works and reports its own errors. The playhead is drawn at its own moment and the timeline scrolls when it reaches an edge; dragging pans freely past either end of the recording; the waveform takes the full height, zooms anywhere in it and is drawn as rounded bars. Tapping a recording in the library opens the editor, which starts playing: the list has no player of its own any more.",
+    "publishedAt":  "2026-10-23T01:41:32Z",
+    "releaseNotes":  "红线恢复为固定不动：播放时每帧按播放头重新摆放窗口，波形从红线下滑过，不再整页跳。\n拖动波形只移动时间轴，红线留在你把它停下的位置；点某处红线落到手指下，波形不跳。\n波形柱子改成锚定在录音时间轴上，移动时不再抖动。",
     "force":  false
 }
