@@ -38,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -140,6 +141,18 @@ fun EditorScreen(
 
     var viewportStartMs by remember { mutableStateOf(0L) }
     var viewportSpanMs by remember { mutableStateOf(0L) }
+
+    /**
+     * Where the red line stands on the screen, as a fraction of the width.
+     *
+     * Half — the middle — unless the user has put it somewhere else. This is
+     * the one thing playback may not change: the line stands still and the
+     * audio slides under it (2026-10-21 「红色的那个线应该在中间固定不动」,
+     * 2026-10-23 「光标不能移动的禁令」). Gestures that move the waveform read the
+     * line's place back from the window ([EditFollow.lineFraction]), so they
+     * are not undone by the next frame of follow.
+     */
+    var lineFraction by remember { mutableFloatStateOf(EditFollow.ANCHOR_FRACTION) }
 
     /**
      * The stretch the user picked, in track time.
@@ -297,7 +310,12 @@ fun EditorScreen(
         val length = EditTrack.totalMs(clips)
         val span = EditMarkerPlan.initialSpanMs(length)
         viewportSpanMs = span
-        viewportStartMs = 0L
+        lineFraction = EditFollow.ANCHOR_FRACTION
+        viewportStartMs = EditFollow.followed(
+            playheadMs = 0L,
+            spanMs = span,
+            lineFraction = lineFraction,
+        ).startMs
         recordings.forEach { recording -> launch { ensureWaveform(recording) } }
     }
 
@@ -428,17 +446,23 @@ fun EditorScreen(
                     playheadMs = at
                 }
                 if (viewportSpanMs > 0L) {
-                    // The window scrolls when the playhead touches its edge,
-                    // not every frame around it: the line moves across the
-                    // screen and the view jumps a page when it gets there, which
-                    // is what every editor does (m00678).
-                    val window = EditFollow.revealed(
-                        current = EditViewport(viewportStartMs, viewportSpanMs),
-                        playheadMs = playheadMs,
-                        totalMs = totalMs,
-                    )
-                    viewportStartMs = window.startMs
-                    viewportSpanMs = window.spanMs
+                    // The line does not move: the window is placed so that the
+                    // playhead stands where the line is, every frame. A window
+                    // that scrolled in pages — when the playhead "touched the
+                    // edge" — moved the line across the screen and then snapped
+                    // it back, which is both the ban the user has stated twice
+                    // and 「手感也很烂，波形移动的时候」 (2026-10-23).
+                    //
+                    // A recording that fits on the screen has nothing to
+                    // scroll: the window stands still and the line is the thing
+                    // that moves, which is the one case where that is right.
+                    if (viewportSpanMs < totalMs) {
+                        viewportStartMs = EditFollow.followed(
+                            playheadMs = playheadMs,
+                            spanMs = viewportSpanMs,
+                            lineFraction = lineFraction,
+                        ).startMs
+                    }
                 }
             }
         }
@@ -494,24 +518,44 @@ fun EditorScreen(
         )
         viewportStartMs = next.startMs
         viewportSpanMs = next.spanMs
+        // The line stayed where it was on the screen while the waveform moved
+        // under it, so that is where it now stands; playback keeps it there
+        // instead of pulling it back to the middle, which would undo the drag
+        // (m03765: one gesture, one thing moving).
+        lineFraction = EditFollow.lineFraction(next, playheadMs)
         pickedCutMs = null
     }
 
-    /** Moves the playhead to [toMs]; used by a tap on the waveform and by the merge strip. */
+    /**
+     * Moves the playhead to [toMs]; used by a tap on the waveform and by the
+     * merge strip.
+     *
+     * A tap lands the line where the finger was and leaves the waveform where
+     * it is — the audio does not jump to the middle of the screen just because
+     * the user said "listen from here". A jump to a moment that is not on
+     * screen (a recording on the merge strip) has no place of its own, so that
+     * moment is centred.
+     */
     fun seekTo(toMs: Long) {
         if (totalMs <= 0L) return
-        playheadMs = toMs.coerceIn(0L, totalMs)
+        val at = toMs.coerceIn(0L, totalMs)
+        playheadMs = at
         // Playing already and asked to hear from somewhere else: the playlist
-        // is seeked, which is what "listen from the cursor" means. Paused: the
-        // window is scrolled to show the moment, so the next press plays it.
+        // is seeked, which is what "listen from the cursor" means.
         if (previewPlaying) {
-            previewPlayer.seekTo(playheadMs)
+            previewPlayer.seekTo(at)
         }
         if (viewportSpanMs > 0L) {
-            viewportStartMs = EditFollow.revealed(
-                current = EditViewport(viewportStartMs, viewportSpanMs),
-                playheadMs = playheadMs,
-                totalMs = totalMs,
+            val current = EditViewport(viewportStartMs, viewportSpanMs)
+            lineFraction = if (at >= current.startMs && at <= current.endMs) {
+                EditFollow.lineFraction(current, at)
+            } else {
+                EditFollow.ANCHOR_FRACTION
+            }
+            viewportStartMs = EditFollow.followed(
+                playheadMs = at,
+                spanMs = viewportSpanMs,
+                lineFraction = lineFraction,
             ).startMs
         }
     }
@@ -530,10 +574,12 @@ fun EditorScreen(
         if (length <= 0L) return
         val span = viewportSpanMs.coerceIn(1L, length)
         viewportSpanMs = span
-        viewportStartMs = EditFollow.revealed(
-            current = EditViewport(viewportStartMs, span),
+        // The line keeps the place the user last saw it at; only the length of
+        // the recording changed.
+        viewportStartMs = EditFollow.followed(
             playheadMs = playheadMs,
-            totalMs = length,
+            spanMs = span,
+            lineFraction = lineFraction,
         ).startMs
     }
 
@@ -717,6 +763,10 @@ fun EditorScreen(
                             )
                             viewportStartMs = next.startMs
                             viewportSpanMs = next.spanMs
+                            // The pinch moved the waveform; the line stayed
+                            // where it was drawn, so that place is what the
+                            // follow rule has to keep from now on.
+                            lineFraction = EditFollow.lineFraction(next, playheadMs)
                         },
                         onDraggingChanged = { isDragging -> dragging = isDragging },
                         modifier = Modifier.fillMaxWidth(),

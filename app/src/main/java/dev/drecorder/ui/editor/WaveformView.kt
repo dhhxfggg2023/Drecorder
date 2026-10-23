@@ -128,18 +128,33 @@ fun WaveformView(
     val viewportGesture by rememberUpdatedState(onViewportGesture)
     val draggingChanged by rememberUpdatedState(onDraggingChanged)
 
-    // One aggregation per (peaks, window, width): the cached buckets are
-    // re-binned into screen columns. It only changes when the viewport or the
-    // size changes. The maths is in core-audio so it is unit-tested
-    // off-device.
-    val columns = remember(peaks, startMs, spanMs, widthPx, barStepPx) {
+    // The bars are anchored to the **recording's** time grid, not to the screen:
+    // one bar is one slice of audio, fixed, and the whole row is translated by
+    // the fraction of a bar the window has scrolled past. Binning them to the
+    // screen instead re-groups the same audio into different bars on every
+    // frame, so every bar changes height as it travels and the waveform
+    // shimmers — which is the difference between "the audio slides" and
+    // 「手感很烂，波形移动的时候」. The heights now only change when the window has
+    // moved a whole bar, by which time the bars are the same picture shifted by
+    // exactly one bar. The maths is in core-audio and unit-tested off-device.
+    val barsAcross = if (widthPx > 0) {
+        (widthPx / barStepPx).toInt().coerceAtLeast(1)
+    } else {
+        1
+    }
+    val barMs = if (spanMs > 0L) (spanMs / barsAcross).coerceAtLeast(1L) else 1L
+    val alignedStartMs = WaveformBins.gridStart(startMs, barMs)
+    val columns = remember(peaks, alignedStartMs, barMs, barsAcross, widthPx) {
         if (widthPx <= 0) {
             WaveformColumns.EMPTY
         } else {
-            val bars = (widthPx / barStepPx).toInt().coerceAtLeast(1)
-            WaveformBins.build(peaks, startMs, spanMs, bars)
+            // Two extra bars: one for the part scrolled off the left edge and
+            // one for the part that just came in on the right.
+            WaveformBins.buildBars(peaks, alignedStartMs, barMs, barsAcross + 2)
         }
     }
+    // How far the window has scrolled into the first bar, in pixels.
+    val shiftPx = (startMs - alignedStartMs).toFloat() / barMs.toFloat() * barStepPx
 
     Box(
         modifier = modifier
@@ -227,10 +242,10 @@ fun WaveformView(
 
                     // A finger that went down and never moved is a tap. On a
                     // cut point it picks that cut point; on the audio it picks
-                    // the stretch between the two cut points around it, which
-                    // is what the small buttons below the waveform then act
-                    // on. Moving the playhead is a drag, and a tap that also
-                    // jumped would make the two gestures fight.
+                    // the stretch between the two cut points around it **and**
+                    // says where to listen from, so the line lands under the
+                    // finger and the waveform does not move (m00678: 「不就是在
+                    // 光标处开始播放」).
                     if (mode == GestureMode.UNDECIDED) {
                         val marker = grabbedMarker
                         if (marker != null) {
@@ -319,7 +334,10 @@ fun WaveformView(
                     if (minV == Int.MAX_VALUE) continue
                     val top = midY - (maxV / 32768f) * halfHeight
                     val bottom = midY - (minV / 32768f) * halfHeight
-                    val x = i * barStepPx + barStepPx / 2f
+                    // The bar grid is fixed to the recording, so the whole row
+                    // is shifted by the part of a bar the window is into.
+                    val x = i * barStepPx + barStepPx / 2f - shiftPx
+                    if (x < -barStepPx || x > size.width + barStepPx) continue
                     // Rounded caps: a capsule per column, so the waveform reads
                     // as a waveform and not as a row of rectangles (m00678).
                     drawRoundRect(
@@ -349,10 +367,12 @@ fun WaveformView(
 
             // --- playhead ---
             //
-            // The line stands at the moment it is at, not at the middle of the
-            // screen: the playhead is a position on the recording, the window is
-            // scrolled to keep it in view, and a line that never moves is a line
-            // that lies about where playback is (m00678).
+            // The line stands where it stands — and during playback the window
+            // is what moves, so it stands *still*: the follow rule keeps its
+            // moment at the anchor and the audio slides under it (m00678,
+            // 「光标不能移动」). It is off the anchor only when the user has put it
+            // there, by tapping somewhere else or by dragging the window away
+            // from it; then a stub on the edge says which way it went.
             playheadMs?.let { at ->
                 val x = msToX(at, size.width, startMs, spanMs)
                 if (x < 0f || x > size.width) {
