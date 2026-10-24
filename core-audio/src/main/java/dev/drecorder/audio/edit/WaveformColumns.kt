@@ -1,13 +1,21 @@
 package dev.drecorder.audio.edit
 
+import kotlin.math.abs
+
 /**
  * The waveform re-binned for the screen.
  *
  * The cached peaks are fixed at 100 buckets per second; the screen has a
  * different number of pixels. [WaveformBins] bridges the two by giving every
- * screen column the extremes of all the buckets that fall into it, which is
- * what a waveform should show: zooming in splits a bucket across columns and
- * zooming out merges many buckets into one (DESIGN §12.4).
+ * drawn column the extremes and the mean loudness of all the buckets that fall
+ * into it (DESIGN §12.4).
+ *
+ * [mins] and [maxs] are the true extremes — what a bucket holds, and what the
+ * hit-testing and the tests ask for. [levels] is the **mean** of each bucket's
+ * amplitude, which is what the picture is drawn from: a column covering half a
+ * second of speech would reach full scale on its loudest sample alone, so a
+ * peak envelope saturates to a solid block at far zoom (「缩放到最小波形的高低
+ * 差特别大，很奇怪」, 2026-10-23), while the mean keeps the loudness contour.
  *
  * Pure and Android-free, so the maths of the waveform can be unit-tested
  * off-device — the decoder is the only part that needs a phone.
@@ -16,9 +24,10 @@ class WaveformColumns(
     val count: Int,
     val mins: IntArray,
     val maxs: IntArray,
+    val levels: IntArray,
 ) {
     companion object {
-        val EMPTY = WaveformColumns(0, IntArray(0), IntArray(0))
+        val EMPTY = WaveformColumns(0, IntArray(0), IntArray(0), IntArray(0))
     }
 }
 
@@ -73,6 +82,33 @@ object WaveformBins {
     fun gridStart(startMs: Long, barMs: Long): Long =
         startMs - startMs.mod(barMs.coerceAtLeast(1L))
 
+    /** The duration of one cached bucket, in ms. */
+    fun bucketMs(peaks: PeakData): Long =
+        (1_000L / peaks.bucketsPerSecond.coerceAtLeast(1)).coerceAtLeast(1L)
+
+    /**
+     * How much audio one drawn column covers, in ms.
+     *
+     * Zoomed out there are many buckets per pixel, so a column is a number of
+     * whole buckets — the mean over them is what keeps the loudness contour
+     * from saturating. Zoomed in the opposite happens, and drawing one column
+     * per pixel is what turns every bucket into a flat block 5 pixels wide:
+     * 「放大后看到一个个矩形」 (2026-10-23). So a column is never shorter than a
+     * bucket: at 2 s across a phone the columns fall back to the bucket grid and
+     * each one is drawn as its own point, which is what makes the peaks sharp
+     * instead of square.
+     *
+     * The answer only changes when the span or the width changes, never when the
+     * window scrolls, so the grid stays still while the picture moves.
+     */
+    fun stepMs(peaks: PeakData, spanMs: Long, widthPx: Int): Long {
+        val bucket = bucketMs(peaks)
+        if (widthPx <= 0 || spanMs <= 0L) return bucket
+        val perPixelMs = (spanMs + widthPx - 1) / widthPx
+        val bucketsPerColumn = (perPixelMs + bucket - 1) / bucket
+        return bucket * bucketsPerColumn.coerceAtLeast(1L)
+    }
+
     /**
      * The extremes of every column, given where each column starts and ends.
      *
@@ -90,6 +126,10 @@ object WaveformBins {
     ): WaveformColumns {
         val mins = emptyMins(count)
         val maxs = emptyMaxs(count)
+        // Per column: the sum of the buckets' amplitudes and how many there
+        // were, turned into a mean at the end.
+        val amplitudes = IntArray(count)
+        val bucketsSeen = IntArray(count)
         val bucketCount = peaks.bucketCount
         val bucketsPerSecond = peaks.bucketsPerSecond
 
@@ -110,9 +150,14 @@ object WaveformBins {
                 val maxV = peaks.maxAt(bucket)
                 if (minV < mins[index]) mins[index] = minV
                 if (maxV > maxs[index]) maxs[index] = maxV
+                amplitudes[index] += (abs(minV) + abs(maxV)) / 2
+                bucketsSeen[index]++
             }
         }
-        return WaveformColumns(count, mins, maxs)
+        val levels = IntArray(count) { index ->
+            if (bucketsSeen[index] == 0) 0 else amplitudes[index] / bucketsSeen[index]
+        }
+        return WaveformColumns(count, mins, maxs, levels)
     }
 
     private fun emptyMins(count: Int): IntArray = IntArray(count) { Int.MAX_VALUE }

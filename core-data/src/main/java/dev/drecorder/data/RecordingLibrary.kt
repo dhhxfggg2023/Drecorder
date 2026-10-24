@@ -110,8 +110,14 @@ class RecordingLibrary(
         val directory = directoryProvider() ?: return emptyList()
         if (!directory.isDirectory) return emptyList()
 
-        val files = directory.listFiles { file -> file.isFile && file.name.isRecordingExtension() }
-            ?: return emptyList()
+        // An export writes to `<name>.tmp.m4a` and renames only on success, so a
+        // half-written file is on disk while the transformer runs. It carries a
+        // recording extension (the muxer picks the container from it) and would
+        // therefore be listed as a recording — a broken one, playable until it
+        // ends in the middle. In-flight exports are not recordings.
+        val files = directory.listFiles { file ->
+            file.isFile && file.name.isRecordingExtension() && !file.name.isInProgressExport()
+        } ?: return emptyList()
 
         return files.map { file ->
             Recording(
@@ -154,3 +160,12 @@ internal fun String.isRecordingExtension(): Boolean =
         endsWith(".wav", ignoreCase = true) ||
         endsWith(".aac", ignoreCase = true) ||
         endsWith(".ogg", ignoreCase = true)
+
+/**
+ * Whether this name belongs to an export that has not finished writing.
+ *
+ * `EditOutputNaming.temporaryFileFor` keeps the recording extension (the muxer
+ * picks the container from it) and puts a `.tmp` marker in the stem, so this is
+ * the only thing that tells a half-written export from a recording.
+ */
+internal fun String.isInProgressExport(): Boolean = contains(".tmp.", ignoreCase = true)

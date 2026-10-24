@@ -39,7 +39,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -66,6 +68,7 @@ import dev.drecorder.audio.edit.EditSegment
 import dev.drecorder.audio.edit.EditTrack
 import dev.drecorder.audio.edit.PeakData
 import dev.drecorder.audio.edit.PeakDecoder
+import dev.drecorder.audio.edit.PeakLod
 import dev.drecorder.audio.edit.PeaksCache
 import dev.drecorder.audio.edit.TrackPeaks
 import dev.drecorder.data.Recording
@@ -73,6 +76,7 @@ import dev.drecorder.data.formatDuration
 import dev.drecorder.playback.EditPreviewPlayer
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -144,18 +148,30 @@ fun EditorScreen(
      * whole state of the timeline.
      *
      * The red line is drawn in the middle of the screen, always, so the window
-     * is not state at all: it is [viewportStartMs] below, derived from these
-     * two numbers. That is what makes the line unable to move — there is no
-     * second owner of the viewport left for it to drift with (2026-10-23
-     * 「红色光标固定在屏幕中间，不要动」).
+     * is not state at all: the waveform derives it from these two numbers. That
+     * is what makes the line unable to move — there is no second owner of the
+     * viewport left for it to drift with (2026-10-23「红色光标固定在屏幕中间，不要动」).
+     *
+     * Nothing in *this* function body reads it, deliberately: while the player
+     * runs, the value changes every frame, and reading it here would recompose
+     * the whole page — chips, buttons, ruler and all — sixty times a second.
+     * The waveform reads it inside its own draw block (a draw, not a
+     * recomposition), and the clock below reads it once a second (「波形移动的帧率
+     * 太低，看起来卡卡的」, 2026-10-23).
      */
     var playheadMs by remember { mutableLongStateOf(0L) }
 
     /** How much of the recording is on screen: the zoom. */
     var viewportSpanMs by remember { mutableStateOf(0L) }
 
-    /** The first moment on screen, derived so the line always has the middle. */
-    val viewportStartMs = EditFollow.window(playheadMs, viewportSpanMs).startMs
+    /**
+     * The playhead at whole seconds, for the clock under the waveform.
+     *
+     * Derived, so the label recomposes once a second instead of once a frame.
+     */
+    val playheadSecond by remember {
+        derivedStateOf { playheadMs / 1_000L * 1_000L }
+    }
 
     /**
      * The stretch the user picked, in track time.
@@ -194,12 +210,15 @@ fun EditorScreen(
     val totalMs = EditTrack.totalMs(clips)
     val cutPoints = EditTrack.cutPoints(clips)
 
-    /** The recordings the track is built from, in play order. */
-    val sources = remember(clips) {
-        EditTrack.files(clips).map { file ->
-            file to clips.filter { it.file == file }.sumOf { it.durationMs }
-        }
-    }
+    /**
+     * The stretches the track is built from, in play order.
+     *
+     * Consecutive clips of one recording are one stretch; the same recording in
+     * two places is two stretches. Grouping by file instead made the copy the
+     * user inserted inseparable from the recording they inserted it into
+     * (「实际上两个音频是可以不一样的」, m00001).
+     */
+    val runs = remember(clips) { EditTrack.runs(clips) }
 
     /** The track's waveform, built from the clips; null until they exist. */
     val trackPeaks: PeakData? = remember(clips, waveforms) {
@@ -325,6 +344,119 @@ fun EditorScreen(
         }
     }
 
+    // --- the detail waveform ---------------------------------------------------
+
+    /** How wide the waveform is, in pixels: this is what the resolution depends on. */
+    var waveformWidthPx by remember { mutableIntStateOf(0) }
+
+    /**
+     * The resolution the stretch on screen needs.
+     *
+     * The cached waveform is one bucket per 10 ms, and at two seconds across a
+     * phone that is a five-pixel block per bucket — the sound becomes a row of
+     * wide steps instead of a wave (「放大了就像一个个很宽的东西挤在一起」,
+     * m00001). [PeakLod] answers with the resolution that gives two buckets per
+     * pixel, which is what keeps the shape the same at every zoom.
+     */
+    val detailBuckets = PeakLod.bucketsPerSecondFor(viewportSpanMs, waveformWidthPx)
+    val wantsDetail = viewportSpanMs > 0L && detailBuckets > PeakLod.COARSE
+
+    /**
+     * The page the detail is decoded for, in track time.
+     *
+     * Quantised on purpose: the playhead moves every frame, and a decode keyed on
+     * it would restart the codec continuously (2026-10-21, 「播放一两秒就停」). A
+     * page is half a screen, so a decode buys the window a whole screen of
+     * scrolling.
+     */
+    val detailPageMs = (viewportSpanMs / 2).coerceAtLeast(1L)
+    val detailStartMs by remember(detailPageMs) {
+        derivedStateOf {
+            Math.floorDiv(playheadMs - detailPageMs, detailPageMs) * detailPageMs
+        }
+    }
+
+    /** The detail waveforms decoded for [detailStartMs], per recording. */
+    var detailPeaks by remember { mutableStateOf(emptyMap<String, PeakData>()) }
+
+    LaunchedEffect(clips, wantsDetail, detailBuckets, detailStartMs) {
+        if (!wantsDetail) {
+            detailPeaks = emptyMap()
+            return@LaunchedEffect
+        }
+        val fromMs = detailStartMs
+        val toMs = fromMs + detailPageMs * 3
+        // One bucket of the requested resolution is the unit the window is
+        // rounded to, so the same page always decodes the same audio and the
+        // cache hits when the user comes back to it.
+        val bucketMs = (1_000L / detailBuckets).coerceAtLeast(1L)
+        val decoded = mutableMapOf<String, PeakData>()
+        for ((file, range) in sourceRanges(clips, fromMs, toMs)) {
+            if (range.isEmpty()) continue
+            val startMs = Math.floorDiv(range.first, bucketMs) * bucketMs
+            val endMs = ((range.last + bucketMs) / bucketMs) * bucketMs
+            if (endMs <= startMs) continue
+            val cacheFile = PeaksCache.windowFileFor(
+                recording = file,
+                cacheDirectory = context.filesDir,
+                bucketsPerSecond = detailBuckets,
+                startMs = startMs,
+                spanMs = endMs - startMs,
+            )
+            val cached = withContext(Dispatchers.IO) { PeaksCache.read(cacheFile, file) }
+            if (cached != null) {
+                decoded[file.path] = cached.data
+                continue
+            }
+            val result = withContext(Dispatchers.IO) {
+                PeakDecoder(bucketsPerSecond = detailBuckets).decodeWindow(
+                    file = file,
+                    startMs = startMs,
+                    endMs = endMs,
+                )
+            }
+            if (result is PeakDecoder.Result.Success) {
+                decoded[file.path] = result.data
+                withContext(Dispatchers.IO) {
+                    runCatching { PeaksCache.write(cacheFile, result.data, file) }
+                }
+            }
+        }
+        detailPeaks = decoded
+        withContext(Dispatchers.IO) { runCatching { PeaksCache.pruneWindows(context.filesDir) } }
+    }
+
+    /**
+     * What the waveform draws: the overview, or the detail where it has arrived.
+     *
+     * Mixed per recording rather than all-or-nothing: a file that has not been
+     * decoded in detail yet keeps the overview for its stretch, so scrolling
+     * never punches a hole in the waveform while the decoder works.
+     */
+    val displayPeaks: PeakData? = remember(
+        clips,
+        waveforms,
+        detailPeaks,
+        detailBuckets,
+        wantsDetail,
+        detailStartMs,
+        detailPageMs,
+        trackPeaks,
+    ) {
+        if (!wantsDetail || detailPeaks.isEmpty() || trackPeaks == null) {
+            trackPeaks
+        } else {
+            TrackPeaks.build(
+                clips = clips,
+                peaksOf = { file -> detailPeaks[file.path] ?: waveforms[file.path]?.peaks },
+                bucketsPerSecond = detailBuckets,
+                fromMs = detailStartMs,
+                toMs = detailStartMs + detailPageMs * 3,
+            ) ?: trackPeaks
+        }
+    }
+
+
     /**
      * Says why the preview died when it dies *after* the press.
      *
@@ -427,29 +559,42 @@ fun EditorScreen(
     LaunchedEffect(previewPlaying, totalMs, startedAtMs) {
         if (!previewPlaying) return@LaunchedEffect
         var armed = false
+        // The player reports where it is every few dozen milliseconds, not on
+        // every frame; drawing the waveform from the last report alone makes it
+        // advance in steps (「波形移动的帧率太低，看起来卡卡的」, 2026-10-23).
+        // So the frame clock fills the gaps: the last report, plus the time
+        // that has passed since it arrived — and it stops filling when the
+        // reports stop, so a stalled player cannot walk the playhead away.
+        var reportedMs = -1L
+        var reportedAtMs = 0L
         while (previewPlaying) {
-            withFrameMillis {
+            withFrameMillis { frameMs ->
                 buffering = previewPlayer.isBuffering
                 if (buffering || dragging) return@withFrameMillis
-                val at = previewPlayer.positionMs
-                if (at < 0L || totalMs <= 0L) return@withFrameMillis
+                val raw = previewPlayer.positionMs
+                if (raw < 0L || totalMs <= 0L) return@withFrameMillis
                 if (!armed) {
-                    if (at < startedAtMs - START_TOLERANCE_MS) return@withFrameMillis
+                    if (raw < startedAtMs - START_TOLERANCE_MS) return@withFrameMillis
                     armed = true
                 }
-                if (at >= totalMs - END_TOLERANCE_MS) {
+                if (raw != reportedMs) {
+                    reportedMs = raw
+                    reportedAtMs = frameMs
+                }
+                val elapsed = (frameMs - reportedAtMs).coerceIn(0L, MAX_EXTRAPOLATION_MS)
+                if (raw >= totalMs - END_TOLERANCE_MS) {
                     previewPlayer.pause()
                     previewPlaying = false
                     playheadMs = totalMs
                 } else {
                     // That is the whole follow rule: the moment moves, the
                     // window follows it. The line stands in the middle of the
-                    // screen because the window is *derived* from the playhead
-                    // (EditFollow.window), so there is nothing here that could
-                    // also move it — every version that kept a window of its
-                    // own ended up with the line drifting (v0.3.6) or snapping
-                    // (2026-10-23 「红色光标固定在屏幕中间，不要动」).
-                    playheadMs = at
+                    // screen because the window is *derived* from the playhead,
+                    // so there is nothing here that could also move it — every
+                    // version that kept a window of its own ended up with the
+                    // line drifting (v0.3.6) or snapping (2026-10-23
+                    // 「红色光标固定在屏幕中间，不要动」).
+                    playheadMs = (reportedMs + elapsed).coerceAtMost(totalMs)
                 }
             }
         }
@@ -592,38 +737,49 @@ fun EditorScreen(
 
     // --- export ----------------------------------------------------------------
 
-    var exportToRun by remember { mutableStateOf<File?>(null) }
-    var exportRequested by remember { mutableStateOf(false) }
-
+    /**
+     * Exports the track, and reports why when it cannot.
+     *
+     * This used to be a flag that a `LaunchedEffect` watched — and the effect's
+     * first act was to clear that same flag, which cancelled the export it had
+     * just started. The cancellation reached the transformer from the wrong
+     * thread and the app died: 「合并结果另存为新录音会闪退」 (m00001). A coroutine
+     * launched from the request itself has no such self-cancelling owner, and
+     * anything that still throws becomes a message instead of a crash.
+     */
     fun startExport(destination: File?) {
-        exportToRun = destination
-        exportRequested = true
-    }
-
-    LaunchedEffect(exportRequested) {
-        if (!exportRequested) return@LaunchedEffect
-        val destination = exportToRun
-        exportRequested = false
-        exportToRun = null
+        if (exporting || clips.isEmpty() || totalMs <= 0L) return
         exporting = true
         exportProgress = 0L
-        val result = exporter.export(
-            plan = plan,
-            destination = destination,
-            onProgress = { percent -> exportProgress = percent.toLong() },
-        )
-        exporting = false
-        when (result) {
-            is EditExportResult.Success -> {
-                Toast.makeText(
-                    context,
-                    context.getString(R.string.editor_exported, result.file.name),
-                    Toast.LENGTH_LONG,
-                ).show()
-                onExported(result.file)
+        val requestedPlan = plan
+        scope.launch {
+            val result = try {
+                exporter.export(
+                    plan = requestedPlan,
+                    destination = destination,
+                    onProgress = { percent -> exportProgress = percent.toLong() },
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                EditExportResult.Failure(
+                    message = failure.message ?: failure.javaClass.simpleName,
+                    cause = failure,
+                )
             }
+            exporting = false
+            when (result) {
+                is EditExportResult.Success -> {
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.editor_exported, result.file.name),
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    onExported(result.file)
+                }
 
-            is EditExportResult.Failure -> notice = result.message
+                is EditExportResult.Failure -> notice = result.message
+            }
         }
     }
 
@@ -642,8 +798,8 @@ fun EditorScreen(
             TopAppBar(
                 title = {
                     Text(
-                        if (sources.size > 1) {
-                            stringResource(R.string.editor_title_merged, sources.size)
+                        if (runs.size > 1) {
+                            stringResource(R.string.editor_title_merged, runs.size)
                         } else {
                             stringResource(R.string.editor_title)
                         },
@@ -655,6 +811,16 @@ fun EditorScreen(
                     }
                 },
                 actions = {
+                    // Which recording goes first is a decision only the user can
+                    // make, and it has to be visible without scrolling anything
+                    // (「怎么决定先后顺序呢，你也没做」 → 「没看到」, 2026-10-23).
+                    // It is shown even while there is only one recording, because
+                    // a button that appears only in the state the user is not in
+                    // is a button that does not exist: the dialog then says what
+                    // to do about it.
+                    TextButton(onClick = { showOrder = true }) {
+                        Text(stringResource(R.string.editor_order))
+                    }
                     TextButton(
                         onClick = { showExportDialog = true },
                         enabled = !exporting && clips.isNotEmpty() && totalMs > 0L,
@@ -680,7 +846,7 @@ fun EditorScreen(
             // The merge strip: the only list in the editor, and it names the
             // recordings being laid end to end — never the cut points, which are
             // already drawn on the waveform and are not something to reorder.
-            if (sources.size > 1) {
+            if (runs.size > 1) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -689,20 +855,17 @@ fun EditorScreen(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    sources.forEachIndexed { index, (file, length) ->
-                        val name = waveforms[file.path]?.displayName ?: file.name
+                    runs.forEachIndexed { index, run ->
+                        val name = waveforms[run.file.path]?.displayName ?: run.file.name
                         AssistChip(
                             onClick = {
-                                // Tapping a recording on the strip jumps the
+                                // Tapping a stretch on the strip jumps the
                                 // playhead to where it starts.
-                                seekTo(
-                                    clips.takeWhile { it.file != file }
-                                        .sumOf { it.durationMs },
-                                )
+                                seekTo(run.startMs)
                             },
                             label = {
                                 Text(
-                                    "${index + 1} ${name.take(8)} · ${formatDuration(length)}",
+                                    "${index + 1} ${name.take(8)} · ${formatDuration(run.durationMs)}",
                                     style = MaterialTheme.typography.labelSmall,
                                 )
                             },
@@ -719,7 +882,7 @@ fun EditorScreen(
                     .weight(1f),
                 contentAlignment = Alignment.Center,
             ) {
-                val peaks = trackPeaks
+                val peaks = displayPeaks
                 if (peaks == null) {
                     WaveformPlaceholder(
                         loading = waveforms.values.any { it.loading },
@@ -729,11 +892,17 @@ fun EditorScreen(
                     WaveformView(
                         peaks = peaks,
                         durationMs = totalMs,
-                        startMs = viewportStartMs,
                         spanMs = viewportSpanMs,
+                        // The width is what decides how fine the waveform can
+                        // be: at a fixed 100 buckets a second, the same 10 ms of
+                        // audio is two pixels wide zoomed out and five zoomed in,
+                        // which is why it stopped looking like sound (m00001).
+                        onWidthPxChanged = { waveformWidthPx = it },
+                        // A getter, not the value: this is what keeps the page
+                        // from recomposing on every frame of playback.
+                        playhead = { playheadMs },
                         removed = emptyList(),
                         markers = cutPoints,
-                        playheadMs = playheadMs,
                         onTimelineDrag = { delta -> panBy(delta) },
                         onMarkerSelect = { ms ->
                             pickedCutMs = if (pickedCutMs == ms) null else ms
@@ -867,11 +1036,6 @@ fun EditorScreen(
                 ) {
                     Text(stringResource(R.string.editor_insert_audio))
                 }
-                if (sources.size > 1) {
-                    TextButton(onClick = { showOrder = true }) {
-                        Text(stringResource(R.string.editor_order))
-                    }
-                }
             }
 
             // The transport: what a thumb reaches first.
@@ -883,7 +1047,7 @@ fun EditorScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        formatDuration(playheadMs),
+                        formatDuration(playheadSecond),
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.Medium,
                         modifier = Modifier.width(56.dp),
@@ -1118,26 +1282,60 @@ fun EditorScreen(
             title = { Text(stringResource(R.string.editor_merge_order)) },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
-                    sources.forEachIndexed { index, (file, length) ->
+                    if (runs.size < 2) {
+                        // Nothing to order yet, and saying so is the honest
+                        // answer: 「只有一条」 is not a missing feature, it is the
+                        // state the user is in. The button that changes that
+                        // state is offered right here.
+                        Text(
+                            stringResource(R.string.editor_order_single),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        TextButton(
+                            onClick = {
+                                showOrder = false
+                                scope.launch { insertCandidates = loadLibrary() }
+                            },
+                        ) {
+                            Text(stringResource(R.string.editor_insert_audio))
+                        }
+                    }
+                    // Two stretches of one recording read the same, so when a
+                    // recording is in the track twice the row says which part of
+                    // it the stretch is (m00001).
+                    val repeated = runs.groupBy { it.file }.any { (_, group) -> group.size > 1 }
+                    runs.forEachIndexed { index, run ->
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                "${index + 1}. ${waveforms[file.path]?.displayName ?: file.name}" +
-                                    "  ${formatDuration(length)}",
+                                text = buildString {
+                                    append("${index + 1}. ")
+                                    append(waveforms[run.file.path]?.displayName ?: run.file.name)
+                                    append("  ${formatDuration(run.durationMs)}")
+                                    if (repeated) {
+                                        append("  ")
+                                        append(
+                                            context.getString(
+                                                R.string.editor_order_source_from,
+                                                formatDuration(run.sourceStartMs),
+                                            ),
+                                        )
+                                    }
+                                },
                                 style = MaterialTheme.typography.bodyMedium,
                                 modifier = Modifier.weight(1f),
                             )
                             TextButton(
                                 enabled = index > 0,
                                 onClick = {
-                                    afterEdit(EditTrack.moveSource(clips, index, index - 1))
+                                    afterEdit(EditTrack.moveRun(clips, index, index - 1))
                                 },
                             ) {
                                 Text(stringResource(R.string.editor_order_earlier))
                             }
                             TextButton(
-                                enabled = index < sources.lastIndex,
+                                enabled = index < runs.lastIndex,
                                 onClick = {
-                                    afterEdit(EditTrack.moveSource(clips, index, index + 1))
+                                    afterEdit(EditTrack.moveRun(clips, index, index + 1))
                                 },
                             ) {
                                 Text(stringResource(R.string.editor_order_later))
@@ -1166,6 +1364,39 @@ fun EditorScreen(
             },
         )
     }
+}
+
+/**
+ * Which stretch of each recording the track plays during a window of the track.
+ *
+ * The window is stated in track time, but a detail decode works one recording at
+ * a time: a window that crosses a join has to be cut into the part of each
+ * recording it covers. A recording that is in the track twice contributes both
+ * of its stretches, and they are merged into one range because a single decode
+ * of that file covers whatever the window reads from it.
+ */
+private fun sourceRanges(
+    clips: List<EditClip>,
+    fromMs: Long,
+    toMs: Long,
+): Map<File, LongRange> {
+    val ranges = linkedMapOf<File, LongRange>()
+    for ((index, clip) in clips.withIndex()) {
+        val outputStart = EditTrack.outputStartOf(clips, index)
+        val outputEnd = outputStart + clip.durationMs
+        val overlapStart = maxOf(outputStart, fromMs)
+        val overlapEnd = minOf(outputEnd, toMs)
+        if (overlapEnd <= overlapStart) continue
+        val sourceStart = clip.startMs + (overlapStart - outputStart)
+        val sourceEnd = clip.startMs + (overlapEnd - outputStart) - 1
+        val known = ranges[clip.file]
+        ranges[clip.file] = if (known == null) {
+            sourceStart..sourceEnd
+        } else {
+            minOf(known.first, sourceStart)..maxOf(known.last, sourceEnd)
+        }
+    }
+    return ranges
 }
 
 /** Whether two recordings can be spliced into one file. */
@@ -1219,12 +1450,22 @@ private const val START_TOLERANCE_MS = 250L
 private const val PREVIEW_STALL_MS = 8_000L
 
 /**
+ * How far the playhead may run past the player's last report, in ms.
+ *
+ * Between two reports of the player's position the frame clock carries the
+ * playhead forward so the waveform slides instead of stepping. The carry is
+ * capped: if the reports stop — a stall, a seek, a buffering player — the
+ * playhead must stop with them rather than walking to the end of the file.
+ */
+private const val MAX_EXTRAPOLATION_MS = 120L
+
+/**
  * The height of the waveform band.
  *
  * One band on the page, not the page: the waveform used to be given every pixel
  * of height the controls left over, which made it a wall of bars that pushed
  * everything else to the bottom (「波形不要整个界面都挤满了」, 2026-10-23).
- * 200 dp is tall enough to read a syllable and short enough to leave the page
- * looking like a page.
+ * Tall enough to read the shape of a syllable (「波形可以再上下宽度长一点」,
+ * 2026-10-23) and short enough to leave the page looking like a page.
  */
-private val WAVEFORM_HEIGHT = 200.dp
+private val WAVEFORM_HEIGHT = 264.dp

@@ -7,9 +7,9 @@ import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -72,43 +72,60 @@ class EditExporter(private val context: Context) {
             return EditExportResult.Failure("源文件已不存在")
         }
 
-        val output = destination ?: EditOutputNaming.outputFileFor(source)
-        val temporary = EditOutputNaming.temporaryFileFor(output)
-        runCatching { temporary.delete() }
+        // Everything up to the transformer runs on the caller's thread, and the
+        // caller is a screen: a plan media3 refuses to compile, a directory that
+        // vanished, a name that cannot be derived — each of those used to throw
+        // straight out of the coroutine and take the app with it. An export that
+        // cannot start is a failure to report, not a crash (m00001).
+        var temporary: File? = null
+        var committed = false
+        return try {
+            val output = destination ?: EditOutputNaming.outputFileFor(source)
+            val temp = EditOutputNaming.temporaryFileFor(output)
+            temporary = temp
+            runCatching { temp.delete() }
 
-        val composition = EditComposition.build(plan)
+            val composition = EditComposition.build(plan)
 
-        val result = withContext(Dispatchers.IO) {
-            runTransformer(composition, temporary, onProgress)
-        }
-
-        return when (result) {
-            is TransformOutcome.Failed -> {
-                runCatching { temporary.delete() }
-                EditExportResult.Failure(result.message, result.cause)
+            val result = withContext(Dispatchers.IO) {
+                runTransformer(composition, temp, onProgress)
             }
 
-            is TransformOutcome.Succeeded -> {
-                // The rename is the commit: until it happens the library cannot see
-                // the file, so an interrupted export leaves nothing behind.
-                val renamed = runCatching {
-                    if (!temporary.renameTo(output)) {
-                        temporary.copyTo(output, overwrite = true)
-                        temporary.delete()
+            when (result) {
+                is TransformOutcome.Failed -> EditExportResult.Failure(result.message, result.cause)
+
+                is TransformOutcome.Succeeded -> {
+                    // The rename is the commit: until it happens the library cannot see
+                    // the file, so an interrupted export leaves nothing behind.
+                    val renamed = runCatching {
+                        if (!temp.renameTo(output)) {
+                            temp.copyTo(output, overwrite = true)
+                            temp.delete()
+                        }
+                    }.isSuccess
+                    if (!renamed) {
+                        EditExportResult.Failure("导出文件无法重命名")
+                    } else {
+                        committed = true
+                        EditExportResult.Success(
+                            file = output,
+                            durationMs = result.durationMs,
+                            fileSizeBytes = output.length(),
+                            transmuxed = result.transmuxed,
+                        )
                     }
-                }.isSuccess
-                if (!renamed) {
-                    runCatching { temporary.delete() }
-                    EditExportResult.Failure("导出文件无法重命名")
-                } else {
-                    EditExportResult.Success(
-                        file = output,
-                        durationMs = result.durationMs,
-                        fileSizeBytes = output.length(),
-                        transmuxed = result.transmuxed,
-                    )
                 }
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            EditExportResult.Failure(failure.message ?: failure.javaClass.simpleName, failure)
+        } finally {
+            // Whatever ended the export — success, failure, or the screen being
+            // torn down mid-run — an uncommitted temporary is not left on disk.
+            // It carries a recording extension, so leaving it there would put a
+            // half-written recording in the library.
+            if (!committed) temporary?.let { runCatching { it.delete() } }
         }
     }
 
@@ -177,7 +194,34 @@ class EditExporter(private val context: Context) {
                     )
                     .build()
 
-                continuation.invokeOnCancellation { transformer.cancel() }
+                // The transformer may only be touched on the looper it was built
+                // with. Cancelling it from the thread that cancelled the coroutine
+                // is what crashed the app with "Transformer is accessed on the
+                // wrong thread" (2026-10-22, m00001).
+                continuation.invokeOnCancellation {
+                    // Posted, not called: this runs on whichever thread cancelled
+                    // the coroutine. The export thread is left to drain its queue
+                    // (quitSafely), so the cancel still happens, just there.
+                    handler.post { runCatching { transformer.cancel() } }
+                }
+
+                // The progress poll belongs on the same looper for the same
+                // reason: read from anywhere else it throws, and the exception was
+                // being swallowed into a progress bar that never moved.
+                if (onProgress != null) {
+                    val ticker = object : Runnable {
+                        override fun run() {
+                            if (!continuation.isActive) return
+                            val state = runCatching { transformer.getProgress(holder) }
+                                .getOrDefault(Transformer.PROGRESS_STATE_UNAVAILABLE)
+                            if (state == Transformer.PROGRESS_STATE_AVAILABLE) {
+                                onProgress(holder.progress / 100)
+                            }
+                            handler.postDelayed(this, PROGRESS_INTERVAL_MS)
+                        }
+                    }
+                    handler.postDelayed(ticker, PROGRESS_INTERVAL_MS)
+                }
 
                 handler.post {
                     if (continuation.isActive) {
@@ -192,18 +236,6 @@ class EditExporter(private val context: Context) {
                             }
                     }
                 }
-
-                if (onProgress != null) {
-                    Thread {
-                        while (continuation.isActive) {
-                            val state = runCatching { transformer.getProgress(holder) }.getOrDefault(0)
-                            if (state == Transformer.PROGRESS_STATE_AVAILABLE) {
-                                onProgress(holder.progress / 100)
-                            }
-                            Thread.sleep(200)
-                        }
-                    }.apply { isDaemon = true }.start()
-                }
             }
         } finally {
             thread.quitSafely()
@@ -212,5 +244,10 @@ class EditExporter(private val context: Context) {
 
     private fun CancellableContinuation<TransformOutcome>.resumeSafely(value: TransformOutcome) {
         if (isActive) resume(value)
+    }
+
+    private companion object {
+        /** How often the transformer is asked how far it has got, in ms. */
+        const val PROGRESS_INTERVAL_MS = 200L
     }
 }

@@ -1,17 +1,17 @@
 ﻿{
-    "versionCode":  21,
-    "versionName":  "0.3.11",
+    "versionCode":  22,
+    "versionName":  "0.3.12",
     "minSupportedVersionCode":  1,
-    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.11/drecorder-0.3.11.apk",
+    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.12/drecorder-0.3.12.apk",
     "mirrors":  [
-                    "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.11/drecorder-0.3.11.apk",
-                    "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.11/drecorder-0.3.11.apk",
-                    "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.11/drecorder-0.3.11.apk"
+                    "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.12/drecorder-0.3.12.apk",
+                    "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.12/drecorder-0.3.12.apk",
+                    "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.12/drecorder-0.3.12.apk"
                 ],
-    "sizeBytes":  53071228,
-    "sha256":  "3884a04212b3d0a303a466112021c96456b554d8318fe294c4908ffb81410c76",
+    "sizeBytes":  53088060,
+    "sha256":  "c8fa61ff6a05b44f0428ddb50e6d46618f9d4a39154cad62150fb595792e94a3",
     "signingCertSha256":  "4f070db7fd59b883e7ab771f88cda4bc80ce3b97e1defcf9e7faeab5a496a348",
-    "publishedAt":  "2026-10-23T11:51:27Z",
-    "releaseNotes":  "这一版只补一个入口：\n\n- 顶栏右上角的「合并顺序」按钮现在永远都在。之前它只在「已经合并了两条以上」时才出现——你打开的是单条录音，所以它根本不存在。\n- 点开后：如果只有一条录音，它会直接说明「现在只有一条录音，没有先后可调」，并给你一个「加入录音」按钮，把另一条接进来，回来就有前移/后移。\n- 波形部分与 0.3.10 相同：放大后是尖的、缩小时有轮廓，红色光标仍在屏幕正中。",
+    "publishedAt":  "2026-10-24T02:11:06Z",
+    "releaseNotes":  "修复：①合并顺序按「段」排列（同一录音插入两段后可各自换序）②放大时波形改用更细的窗口波形，任何缩放都保持声波外形 ③「另存为新录音」导出不再闪退（LaunchedEffect 自清 key 导致取消跨线程）；导出中/取消的临时文件不再出现在录音列表",
     "force":  false
 }

@@ -247,23 +247,76 @@ object EditTrack {
     }
 
     /**
-     * Moves one whole recording to [toIndex] among the recordings on the track.
+     * A stretch of the track made of **consecutive** clips of one recording.
      *
-     * This is the merge order: which recording plays first is the one thing the
-     * old read-only strip could not change, so "合并音频还是不能决定顺序" stayed
-     * true however the strip was drawn (m00376). A recording's clips move
-     * together as one block and keep their own order, because the unit the user
-     * is reordering is the recording, not the clip.
+     * This, not the recording, is what the merge order reorders. The same
+     * recording can appear on the track twice — the user inserts the file they
+     * are editing — and those two appearances are different stretches of audio
+     * that have to be movable on their own: grouping by file made them one
+     * entry, so the inserted copy could not be moved at all
+     * (「实际上两个音频是可以不一样的」, m00001).
+     *
+     * @param firstClip where the run's first clip sits in the clip list
+     * @param sourceStartMs where in the recording the run starts, so that two
+     *   runs of one file can be told apart
      */
-    fun moveSource(clips: List<EditClip>, fromIndex: Int, toIndex: Int): List<EditClip> {
-        val sources = files(clips)
-        if (fromIndex !in sources.indices || toIndex !in sources.indices) return clips
-        if (fromIndex == toIndex) return clips
-        val blocks = sources.map { file -> clips.filter { it.file == file } }
-        val reordered = blocks.toMutableList().apply {
-            val block = removeAt(fromIndex)
-            add(toIndex, block)
+    data class TrackRun(
+        val file: File,
+        val firstClip: Int,
+        val clipCount: Int,
+        val startMs: Long,
+        val durationMs: Long,
+        val sourceStartMs: Long,
+    )
+
+    /**
+     * The track cut into runs of consecutive clips of one recording.
+     *
+     * Two clips of one file that are not adjacent are two runs: something else
+     * plays between them, so they are two separate pieces of the merge order.
+     */
+    fun runs(clips: List<EditClip>): List<TrackRun> {
+        if (clips.isEmpty()) return emptyList()
+        val runs = mutableListOf<TrackRun>()
+        var index = 0
+        var cursor = 0L
+        while (index < clips.size) {
+            val file = clips[index].file
+            var end = index
+            var length = 0L
+            while (end < clips.size && clips[end].file == file) {
+                length += clips[end].durationMs
+                end++
+            }
+            runs += TrackRun(
+                file = file,
+                firstClip = index,
+                clipCount = end - index,
+                startMs = cursor,
+                durationMs = length,
+                sourceStartMs = clips[index].startMs,
+            )
+            cursor += length
+            index = end
         }
+        return runs
+    }
+
+    /**
+     * Moves the run at [fromIndex] to [toIndex] among the runs of the track.
+     *
+     * The run's clips move together as one block and keep their own order,
+     * because the unit the user is reordering is a stretch of audio, not a
+     * single clip — the cut points inside it are the user's, and reordering
+     * must not silently reorder them.
+     */
+    fun moveRun(clips: List<EditClip>, fromIndex: Int, toIndex: Int): List<EditClip> {
+        val blocks = runs(clips).map { run ->
+            clips.subList(run.firstClip, run.firstClip + run.clipCount).toList()
+        }
+        if (fromIndex !in blocks.indices || toIndex !in blocks.indices) return clips
+        if (fromIndex == toIndex) return clips
+        val reordered = blocks.toMutableList().apply { add(toIndex, removeAt(fromIndex)) }
         return reordered.flatten()
     }
 
@@ -310,9 +363,6 @@ object EditTrack {
             addAll(index, listOf(left) + added + listOf(right))
         }
     }
-
-    /** The distinct files the track draws its audio from. */
-    fun files(clips: List<EditClip>): List<File> = clips.map { it.file }.distinct()
 
     /**
      * The track as an [EditPlan], which is what the exporter and the preview
