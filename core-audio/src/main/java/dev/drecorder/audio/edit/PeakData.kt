@@ -163,7 +163,10 @@ class PeakBins(
      *
      * Zero for a whole recording. A waveform built for a *window* of a
      * recording carries the window's start, so it can be drawn on the same
-     * time axis as everything else (DESIGN §12.4).
+     * time axis as everything else (DESIGN §12.4). It is the requested window
+     * start rather than the first frame's timestamp: a driver may rebase its
+     * timestamps to the window, and stamping those would move the whole detail
+     * waveform to the beginning of the file.
      */
     val offsetMs: Long = 0L,
 ) {
@@ -186,18 +189,85 @@ class PeakBins(
     val bucketCount: Int get() = count
 
     /**
-     * Feeds interleaved PCM16 samples.
+     * Feeds interleaved PCM16 samples that continue the stream from where the
+     * last call left off.
      *
      * @param samples the interleaved samples
      * @param sampleCount how many samples of [samples] to read; values beyond
      *   the array are ignored
      */
     fun addPcm16(samples: ShortArray, sampleCount: Int) {
+        addFrom(samples, 0, min(sampleCount, samples.size))
+    }
+
+    /**
+     * Feeds interleaved PCM16 samples that begin at [startFrame] on the
+     * recording's own timeline.
+     *
+     * Bucketing by presentation time — rather than by "the Nth sample fed" —
+     * is what makes two window waveforms of the same recording agree at their
+     * seam. A decoder starts its output where it starts: the first buffer it
+     * hands back does not have to land on the requested window start, and an
+     * AAC decoder in particular emits a priming offset of its own. Bucketing
+     * sequentially folded that offset into the waveform, so every window was
+     * shifted by a slightly different amount and the picture jumped sideways
+     * each time the display moved from one window's data to the next — a jump
+     * that only a zoom wide enough to make a millisecond wider than a pixel
+     * could show.
+     *
+     * The position is a frame index on purpose: converting a presentation time
+     * to a frame count and back loses a frame each way, and the resulting
+     * one-frame wobble between chunks read as a gap, which then emitted a
+     * silent bucket that did not exist in the audio.
+     *
+     * Samples before this waveform's own start are dropped: they belong to the
+     * window before it. A real gap — a decoder that skipped a stretch — is
+     * filled with silent buckets, because dropping them would pull every later
+     * bucket towards the start and bend the time axis instead of leaving a hole
+     * in it. A gap of a frame or two is not a real gap but the same quantisation
+     * as above, so it is snapped rather than filled.
+     */
+    fun addPcm16AtFrame(startFrame: Long, samples: ShortArray, sampleCount: Int) {
         if (sampleCount <= 0) return
         val usable = min(sampleCount, samples.size)
+        val firstFrameOfWaveform = offsetMs * sampleRate / 1_000L
+        var frame = startFrame
         var sampleIndex = 0
-        while (sampleIndex < usable) {
-            val framesAvailable = (usable - sampleIndex) / channelCount
+        val framesInBuffer = usable / channelCount
+        if (frame + framesInBuffer <= firstFrameOfWaveform) return
+        if (frame < firstFrameOfWaveform) {
+            val skipFrames = (firstFrameOfWaveform - frame).toInt()
+            sampleIndex = skipFrames * channelCount
+            frame = firstFrameOfWaveform
+        }
+        if (frame > frameCursor) {
+            if (frame - frameCursor <= FRAME_QUANTISATION_SLOP) {
+                frame = frameCursor
+            } else {
+                if (currentHasSample) emit()
+                val silentUntil = bucketOf(frame)
+                while (count < silentUntil) {
+                    currentMin = 0
+                    currentMax = 0
+                    currentHasSample = false
+                    emit()
+                }
+                frameCursor = frame
+            }
+        } else if (frameCursor - frame > FRAME_QUANTISATION_SLOP) {
+            // Overlap with what was already counted: drop the repeated frames
+            // rather than counting them twice.
+            val overlapFrames = (frameCursor - frame).toInt()
+            sampleIndex += overlapFrames * channelCount
+            if (sampleIndex >= usable) return
+        }
+        addFrom(samples, sampleIndex, usable)
+    }
+
+    private fun addFrom(samples: ShortArray, fromSample: Int, toSample: Int) {
+        var sampleIndex = fromSample
+        while (sampleIndex < toSample) {
+            val framesAvailable = (toSample - sampleIndex) / channelCount
             if (framesAvailable <= 0) break
 
             val bucket = bucketOf(frameCursor)
@@ -274,6 +344,16 @@ class PeakBins(
 
     private companion object {
         const val INITIAL_CAPACITY = 1_024
+
+        /**
+         * How far a reported position may be off before it counts as a real gap
+         * or a real overlap, in frames.
+         *
+         * A presentation time rounded to the nearest frame is exact to within a
+         * frame; anything in this range is the same audio at the same moment and
+         * must not bend the bucket grid.
+         */
+        const val FRAME_QUANTISATION_SLOP = 2L
     }
 }
 

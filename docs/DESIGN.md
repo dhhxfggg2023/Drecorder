@@ -478,7 +478,8 @@ EditedMediaItemSequence.withAudioFrom(
 | 磁盘代价 | 30 分钟录音约 40 MB，可接受 |
 | 原子性 | 先写 `<name>.tmp`，成功后才 rename；中断不留半截文件 |
 | 静音标记 | 派生文件的 `.silent` 旁车**重新测定**（导出时本来就在解包），不继承源文件 |
-| 库里的标识 | `RecordingLibrary` 读取派生标记，列表上显示「已编辑」 |
+| 库里的标识 | `RecordingLibrary` 读取派生标记，列表上显示「已编辑」；标记由导出成功后自己写（`DerivedMarker.markDerived(导出名)`），不依赖宿主回调 |
+| 正在录的那份 | 不进列表：引擎从创建起就用最终文件名写，所以靠 `recordings(activeName)` 按「当前会话的输出名」排除——删一个正在写的文件只会 unlink fd 却仍报成功 |
 
 ### 12.4 波形子系统
 
@@ -513,7 +514,7 @@ EditedMediaItemSequence.withAudioFrom(
 | 放大时的分辨率 | **一列永远不细于一个缓存桶**（`WaveformBins.stepMs`）：桶是 10 ms，手机上 2 s 一屏是 2 ms 一像素，按像素分列等于把同一个桶重复五列 → 「放大后看到一个个矩形」（2026-10-23）。缩小时一列是整数个桶，取平均。**放大的时候换更细的桶**，不是拿粗桶充数：视口需要的分辨率高于概览缓存（100 桶/秒）时，按 `PeakLod` 阶梯（10/20/50/100/200/500/1000）选中一档，用 `PeakDecoder.decodeWindow` 解出**只覆盖视口附近三页**的窗口波形（带 `offsetMs`，写 `PeaksCache.windowFileFor` 缓存），再由 `TrackPeaks.build(fromMs, toMs)` 按窗口重建成时间线波形，见 §12.4「窗口解码」。只靠 100 桶/秒硬撑的表现是「缩小的时候像声波，放大了就像一个个很宽的东西挤在一起」（2026-10-24）|
 | 波形柱子 | 列锚在**录音自己的时间网格**上（`WaveformBins.buildBars` + `gridStart`），整排按「已滚过多少分之一列」平移；逐帧重分桶会让每列移动时都在变高 → 抖动（2026-10-23「手感也很烂，波形移动的时候」）|
 | 高度 | 波形是页面上的一条带（**264 dp**），不再吃掉控件剩下的全部高度；`height = null` 撑满整页让全部按钮被挤到底部，被否决（2026-10-23「波形不要整个界面都挤满了」，随后「波形可以再上下宽度长一点」）|
-| 缩放 | 默认一屏 **8 s**（`EditMarkerPlan.DEFAULT_SPAN_MS`），阶梯 2/5/8/12/30/60/120/300/600 s。30 s 开局被读成「缩放太长不好看」（2026-10-23）|
+| 缩放 | 默认一屏 **8 s**（`EditMarkerPlan.DEFAULT_SPAN_MS`），阶梯 5/8/12/30/60/120/300/600 s。最窄一屏 5 s（2026-11-04：「一跳一跳」在 2 s 一屏时最明显，缩放上限放宽到 5 s 后量化与卡顿都低于可见阈值）|
 | 流畅 | 播放头**每帧**由帧时钟外推（`previewReportedMs + 帧时间差`，上限 `MAX_EXTRAPOLATION_MS = 120 ms`）；播放器几十一百毫秒才报一次位置，直接读就会「一格一格走」（2026-10-23「波形移动的帧率是不是太低了」）|
 | 读播放头的时机 | 组合阶段**不读**播放头：`WaveformView` 收 `playhead: () -> Long`，只在 `Canvas` 的 draw 块里读。每帧写状态再在组合里读，会把芯片/按钮/刻度一起重组，那才是「卡」的来源；进入绘制的只有一个 `State` 变更 |
 | 合并顺序入口 | 顺序在**顶栏「顺序」按钮**（`showOrder` → 对话框「前移/后移」→ `EditTrack.moveRun`）。放在下排按钮里等于没做（2026-10-23「怎么决定先后顺序呢，你也没做」），放在横向滚动的芯片行末尾等于看不见（同月「没看到」）——顶栏永远在视野里 |
@@ -540,7 +541,7 @@ EditedMediaItemSequence.withAudioFrom(
 | 函数 | 作用 |
 | --- | --- |
 | `EditFollow.window(playheadMs, spanMs)` | 红线居中：窗口起点 = 播放头 − 半屏；**不夹到录音内**（夹了就会把红线推走）|
-| `EditFollow.scrubbed(cursor, deltaMs, totalMs)` | 拖动：播放头按时长移动并夹在 `[0, total]`，跨度夹进 `[MIN_SPAN_MS=2000, total]` |
+| `EditFollow.scrubbed(cursor, deltaMs, totalMs)` | 拖动：播放头按时长移动并夹在 `[0, total]`，跨度夹进 `[MIN_SPAN_MS=5000, total]` |
 | `EditFollow.seeked(cursor, atMs, totalMs)` | 点按/跳转：把该时刻放到线下（红线不动，所以是波形滚过去）|
 | `EditFollow.zoomed(cursor, totalMs, zoom, panFraction, focusFraction)` | 捏合：手指下那一刻留在原位，跨度夹进 `[2000, total]`，线仍在正中 |
 | `EditFollow.pixelsToMs/msPerPixel` | 手指位移 ↔ 时间位移，用 `roundToLong()`（`toLong()` 会丢 1 ms）；甩动速度也用它换算 |
@@ -553,7 +554,7 @@ EditedMediaItemSequence.withAudioFrom(
 | `EditMarkers.insert/removeAt/move` | 标记的增删移：排序、去重、夹在录音内、不重合 |
 | `EditMarkers.segmentContaining` | 播放头落在哪个片段（首标记前 = 从 0 起，末标记后 = 到结尾） |
 | `EditMarkers.deleteSegment` | 删两标记之间的片段 → 新的保留区间 + 保留边界标记 |
-| `EditMarkerPlan.initialSpanMs/nextSpanMs/fitSpanMs` | 打开默认 **8 s** 跨度；缩放阶梯（2/5/8/12/30/60/120/300/600 s）；全览不超过 600 s |
+| `EditMarkerPlan.initialSpanMs/nextSpanMs/fitSpanMs` | 打开默认 **8 s** 跨度；缩放阶梯（5/8/12/30/60/120/300/600 s）；全览不超过 600 s |
 | `EditTimeline.nearestOutputMsForSourceTime` | 拖到已删区间时映射到**最近仍存在的时刻**，不会定位失败 |
 | `PeakAssembly.add/snapshot` | 把分段解码的片段拼回整段波形（按各自时间落位，**分辨率不同直接拒绝**） |
 

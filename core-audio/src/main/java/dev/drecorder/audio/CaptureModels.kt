@@ -15,8 +15,15 @@ enum class StopReason {
     Error,
 }
 
-/** Audio format requested from the playback-capture stream. */
-data class AudioFormatSpec(
+/**
+ * Audio format requested from the playback-capture stream.
+ *
+ * Named [CaptureFormat] rather than AudioFormatSpec because there is a second,
+ * unrelated spec in `audio.edit` describing what a *file* contains (mime, sample
+ * rate, channels). The two used to share a name in different packages, so a file
+ * that imported both compiled only while neither name was spelled out.
+ */
+data class CaptureFormat(
     val sampleRate: Int = 48_000,
     val channelCount: Int = 2,
     val bitRate: Int = 192_000,
@@ -46,6 +53,13 @@ sealed interface CaptureState {
         val everHadSignal: Boolean,
         /** How many files this session produced; more than 1 when it was segmented. */
         val segmentCount: Int = 1,
+        /**
+         * The finished session, so the owner of the engine can write the
+         * sidecar markers and the cached waveforms whichever way the session
+         * ended — a projection revocation ends it inside the engine, and the
+         * service would otherwise never see the handle at all.
+         */
+        val handle: RecordingHandle? = null,
     ) : CaptureState
 
     data class Failed(val message: String) : CaptureState

@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
@@ -59,6 +60,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -72,6 +75,8 @@ import dev.drecorder.data.SilentMarker
 import dev.drecorder.data.formatDuration
 import dev.drecorder.data.formatSize
 import dev.drecorder.ui.recordingWhenLabel
+import android.content.Context
+import android.net.Uri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -89,8 +94,21 @@ fun LibraryScreen(
     onBack: () -> Unit,
     onEdit: (List<Recording>) -> Unit = {},
     editingDisabled: Boolean = false,
+    /**
+     * The file the capture session is writing right now, if any. The engine opens
+     * its file under the final name, so it would otherwise be listed as a finished
+     * recording — and deleting it would pull the file out from under the writer.
+     */
+    activeRecordingName: String? = null,
+    /** Changes every time the screen is entered, so a stale list cannot survive. */
+    screenKey: Int = 0,
+    /** Opens the system file picker to import an external audio file. */
+    onImport: () -> Unit = {},
 ) {
     val context = LocalContext.current
+    // Reads text through the resources rather than the context, so a language
+    // change is picked up (Lint: LocalContextGetResourceValueCall).
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -116,15 +134,21 @@ fun LibraryScreen(
     val openFailed = stringResource(R.string.library_open_failed)
     val deleted = stringResource(R.string.library_deleted)
     val deleteFailed = stringResource(R.string.library_delete_failed)
+    // A rename that fails is not a delete that failed: the file is untouched.
+    val renameFailed = stringResource(R.string.library_rename_failed)
     val editBusy = stringResource(R.string.library_edit_busy)
 
     suspend fun reload() {
         loading = true
-        recordings = withContext(Dispatchers.IO) { library.recordings() }
+        recordings = withContext(Dispatchers.IO) { library.recordings(activeRecordingName) }
         loading = false
     }
 
-    LaunchedEffect(Unit) { reload() }
+    // Reloaded whenever the screen is (re)entered, and whenever the file being
+    // recorded changes. Keying it on the recording name alone meant that coming
+    // back from the editor — where a new recording may just have been written —
+    // showed the list as it was before the export.
+    LaunchedEffect(activeRecordingName, screenKey) { reload() }
 
     fun notify(message: String) {
         scope.launch { snackbarHostState.showSnackbar(message) }
@@ -138,9 +162,17 @@ fun LibraryScreen(
     fun deleteRecordings(targets: List<Recording>) {
         if (targets.isEmpty()) return
         scope.launch {
-            val ok = withContext(Dispatchers.IO) { targets.all { library.delete(it) } }
+            // `all { }` stopped at the first failure, so a batch containing one
+            // undeletable file silently left the rest behind while the toast said
+            // it had failed. Every target is attempted, and the message reports
+            // whether all of them went.
+            val deletedCount = withContext(Dispatchers.IO) { targets.count { library.delete(it) } }
             reload()
-            if (ok) snackbarHostState.showSnackbar(deleted) else snackbarHostState.showSnackbar(deleteFailed)
+            if (deletedCount == targets.size) {
+                snackbarHostState.showSnackbar(deleted)
+            } else {
+                snackbarHostState.showSnackbar(deleteFailed)
+            }
         }
     }
 
@@ -153,7 +185,7 @@ fun LibraryScreen(
                 title = {
                     Text(
                         if (selectionMode) {
-                            stringResource(R.string.library_selected_count, selected.size)
+                            pluralStringResource(R.plurals.recordings_selected, selected.size, selected.size)
                         } else {
                             stringResource(R.string.library_title)
                         },
@@ -174,6 +206,16 @@ fun LibraryScreen(
                     }
                 },
                 actions = {
+                    // Import sits here because it belongs to the library, not to
+                    // the recorder: the file becomes a recording like any other.
+                    if (!selectionMode) {
+                        IconButton(onClick = onImport) {
+                            Icon(
+                                imageVector = Icons.Filled.Add,
+                                contentDescription = stringResource(R.string.library_import),
+                            )
+                        }
+                    }
                     // Only the "select" entry point stays in the bar. The three
                     // selection actions used to live here as well, and on a
                     // phone the third one (合并) was pushed off the edge — the
@@ -231,7 +273,7 @@ fun LibraryScreen(
                                 if (picked.size < 2) {
                                     scope.launch {
                                         snackbarHostState.showSnackbar(
-                                            context.getString(R.string.library_merge_need_two),
+                                            resources.getString(R.string.library_merge_need_two),
                                         )
                                     }
                                 } else {
@@ -296,16 +338,12 @@ fun LibraryScreen(
                                 }
                             },
                             onShare = {
-                                val uri = runCatching {
-                                    FileProvider.getUriForFile(
-                                        context,
-                                        "${context.packageName}.fileprovider",
-                                        recording.file,
-                                    )
-                                }.getOrNull()
-                                if (uri == null) {
-                                    notify(openFailed)
-                                } else {
+                                scope.launch {
+                                    val uri = shareUri(context, recording.file)
+                                    if (uri == null) {
+                                        notify(openFailed)
+                                        return@launch
+                                    }
                                     val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
                                         type = "audio/*"
                                         putExtra(android.content.Intent.EXTRA_STREAM, uri)
@@ -362,8 +400,24 @@ fun LibraryScreen(
         val targets = recordings.filter { it.displayName in selected }
         AlertDialog(
             onDismissRequest = { deleteSelectedVisible = false },
-            title = { Text(stringResource(R.string.library_delete_selected_title, targets.size)) },
-            text = { Text(stringResource(R.string.library_delete_selected_body, targets.size)) },
+            title = {
+                Text(
+                    pluralStringResource(
+                        R.plurals.recordings_delete_title,
+                        targets.size,
+                        targets.size,
+                    ),
+                )
+            },
+            text = {
+                Text(
+                    pluralStringResource(
+                        R.plurals.recordings_delete_body,
+                        targets.size,
+                        targets.size,
+                    ),
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
                     deleteSelectedVisible = false
@@ -388,7 +442,7 @@ fun LibraryScreen(
                 scope.launch {
                     val ok = withContext(Dispatchers.IO) { library.rename(target, newName) }
                     reload()
-                    if (!ok) snackbarHostState.showSnackbar(deleteFailed)
+                    if (!ok) snackbarHostState.showSnackbar(renameFailed)
                 }
             },
         )
@@ -502,10 +556,14 @@ private fun RecordingRow(
                     }
                 }
             }
+        // The when-line is the anchor of the row: it is what the user actually
+        // recognises a recording by (a file name is an implementation detail).
+        // Everything else hangs under it at a smaller weight, so a list of rows
+        // scans as one column of times instead of a wall of mixed text.
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = recordingWhenLabel(recording),
-                style = MaterialTheme.typography.bodyLarge,
+                style = MaterialTheme.typography.titleMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -590,4 +648,29 @@ private fun RecordingRow(
         }
         }
     }
+}
+
+/**
+ * A content URI for [file], copying it into the app cache when it sits outside
+ * every path the provider exports.
+ *
+ * The output folder is the user's choice, so a recording may live anywhere on
+ * shared storage. Exporting all of shared storage through the provider would let
+ * any app holding one of our URIs read any file on the device; copying the one
+ * recording being shared keeps that surface to that one file.
+ */
+private suspend fun shareUri(context: Context, file: File): Uri? = withContext(Dispatchers.IO) {
+    val direct = runCatching {
+        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    }.getOrNull()
+    if (direct != null) return@withContext direct
+
+    runCatching {
+        val directory = File(context.cacheDir, "sharing").apply { mkdirs() }
+        val copy = File(directory, file.name)
+        if (!copy.isFile || copy.length() != file.length()) {
+            file.copyTo(copy, overwrite = true)
+        }
+        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", copy)
+    }.getOrNull()
 }

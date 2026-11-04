@@ -1,17 +1,17 @@
-﻿{
-    "versionCode":  22,
-    "versionName":  "0.3.12",
-    "minSupportedVersionCode":  1,
-    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.12/drecorder-0.3.12.apk",
-    "mirrors":  [
-                    "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.12/drecorder-0.3.12.apk",
-                    "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.12/drecorder-0.3.12.apk",
-                    "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.12/drecorder-0.3.12.apk"
-                ],
-    "sizeBytes":  53088060,
-    "sha256":  "c8fa61ff6a05b44f0428ddb50e6d46618f9d4a39154cad62150fb595792e94a3",
-    "signingCertSha256":  "4f070db7fd59b883e7ab771f88cda4bc80ce3b97e1defcf9e7faeab5a496a348",
-    "publishedAt":  "2026-10-24T02:11:06Z",
-    "releaseNotes":  "修复：①合并顺序按「段」排列（同一录音插入两段后可各自换序）②放大时波形改用更细的窗口波形，任何缩放都保持声波外形 ③「另存为新录音」导出不再闪退（LaunchedEffect 自清 key 导致取消跨线程）；导出中/取消的临时文件不再出现在录音列表",
-    "force":  false
+{
+  "versionCode": 23,
+  "versionName": "0.3.13",
+  "minSupportedVersionCode": 1,
+  "apkUrl": "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.13/drecorder-0.3.13.apk",
+  "mirrors": [
+    "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.13/drecorder-0.3.13.apk",
+    "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.13/drecorder-0.3.13.apk",
+    "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.13/drecorder-0.3.13.apk"
+  ],
+  "sizeBytes": 53247720,
+  "sha256": "1e5a717302b5981920632bd60ee6b5bcf4f6e30b20ccbb1586a935a7fe0563c1",
+  "signingCertSha256": "4f070db7fd59b883e7ab771f88cda4bc80ce3b97e1defcf9e7faeab5a496a348",
+  "publishedAt": "2026-11-04T14:00:54Z",
+  "releaseNotes": "中英双语与外观设置；主页/设置并列导航；录制异常收尾与导出数据安全；更新安装保留录音的判定；火柴棍波形与匀速播放头；波形后台预计算、导入与系统分享导入；设置页分组。",
+  "force": false
 }

@@ -18,13 +18,12 @@ object EditMarkerPlan {
      * The spans the zoom buttons step through, in ms.
      *
      * Eight seconds is what a phone screen can show as a waveform that still
-     * has a shape you can read — a phrase, and the pauses around it — and two
-     * seconds is the finest a cut needs to be. Thirty seconds used to be the
-     * opening span and it read as a wall of sound (「缩放太长不好看」,
-     * 2026-10-23).
+     * has a shape you can read — a phrase, and the pauses around it — and five
+     * seconds is the narrowest a screen will hold (EditFollow.MIN_SPAN_MS).
+     * Thirty seconds used to be the opening span and it read as a wall of
+     * sound (「缩放太长不好看」, 2026-10-23).
      */
     val SPANS: List<Long> = listOf(
-        2_000L,
         5_000L,
         8_000L,
         12_000L,

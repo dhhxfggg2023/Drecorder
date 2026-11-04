@@ -10,6 +10,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.media.projection.MediaProjectionManager
+import android.content.res.Configuration
 import android.os.Environment
 import android.os.IBinder
 import android.util.Log
@@ -18,18 +19,22 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.IntentCompat
 import dev.drecorder.MainActivity
 import dev.drecorder.R
-import dev.drecorder.audio.AudioFormatSpec
+import dev.drecorder.audio.CaptureFormat
 import dev.drecorder.audio.CaptureScope
+import dev.drecorder.audio.CaptureState
 import dev.drecorder.audio.ProjectionCaptureEngine
 import dev.drecorder.audio.RecordingHandle
 import dev.drecorder.audio.StopReason
 import dev.drecorder.audio.edit.PeaksCache
 import dev.drecorder.data.SilentMarker
+import dev.drecorder.ui.UiPreferences
+import dev.drecorder.waveforms.WaveformPrecompute
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -47,6 +52,12 @@ class CaptureService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var engine: ProjectionCaptureEngine? = null
     private var overlay: CaptureOverlay? = null
+
+    /** True once the finished session was persisted; finishing twice would duplicate it. */
+    private var completed = false
+
+    /** True between accepting a start request and the engine reporting it is up. */
+    private var startInFlight = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -69,15 +80,34 @@ class CaptureService : Service() {
     }
 
     override fun onDestroy() {
+        WaveformPrecompute.setCaptureActive(false)
         overlay?.hide()
         overlay = null
-        engine?.stop(StopReason.UserStop)
+        val stopping = engine
         engine = null
         serviceScope.cancel()
+        if (stopping != null) {
+            // The process may be going away, but the container still has to be
+            // closed or the file is unplayable. Off the main thread: the close
+            // joins the capture worker and flushes the encoder.
+            Thread({
+                val handle = runCatching { stopping.stop(StopReason.UserStop) }.getOrNull()
+                if (handle != null) persist(handle)
+            }, "drecorder-teardown").start()
+        }
         super.onDestroy()
     }
 
     private fun startCapture(intent: Intent) {
+        if (engine != null || startInFlight) {
+            // A second start (double tap, re-sent intent) would overwrite the live
+            // engine: its AudioRecord, encoder and muxer would never be closed and
+            // its file never finalised.
+            Log.w(TAG, "ignoring a start while a session is already running")
+            return
+        }
+        startInFlight = true
+        completed = false
         val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
         val resultData = IntentCompat.getParcelableExtra(intent, EXTRA_RESULT_DATA, Intent::class.java)
 
@@ -90,47 +120,76 @@ class CaptureService : Service() {
         )
 
         CaptureSession.resetForNewSession()
+        WaveformPrecompute.setCaptureActive(true)
 
         if (resultData == null) {
             CaptureSession.fail(getString(R.string.error_missing_projection))
+            startInFlight = false
             shutdown()
             return
         }
 
-        val projection = getSystemService(MediaProjectionManager::class.java)
-            ?.getMediaProjection(resultCode, resultData)
-        if (projection == null) {
-            CaptureSession.fail(getString(R.string.error_projection_null))
-            shutdown()
-            return
-        }
-
-        val scope = scopeFrom(intent)
+        val captureScope = scopeFrom(intent)
         val preferences = RecordSettings.load(this)
-        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
-        val capture = ProjectionCaptureEngine(
-            scope = scope,
-            format = AudioFormatSpec(
-                sampleRate = preferences.sampleRate,
-                channelCount = preferences.channelCount,
-                bitRate = preferences.bitRate,
-            ),
-            outputDirectory = outputDirectory(),
-            encoder = preferences.encoder,
-            baseName = "drecorder-$stamp",
-            segmentDurationMs = preferences.segmentDurationMs,
-        )
-        capture.attachProjection(projection)
+        val directory = outputDirectory()
+        val baseName = uniqueBaseName(directory)
 
-        val started = capture.start()
-        if (started.isFailure) {
-            CaptureSession.fail(started.exceptionOrNull()?.message ?: "capture failed to start")
-            shutdown()
-            return
+        // Starting a session used to run on the main thread, and it is the most
+        // expensive thing the app does: it probes for a hardware AAC encoder by
+        // instantiating one, builds an AudioRecord, and opens the muxer. All three
+        // are tens to hundreds of milliseconds of driver work — a visible freeze
+        // when the user taps record, an ANR when the device is busy.
+        serviceScope.launch {
+            val attempt = withContext(Dispatchers.IO) {
+                runCatching {
+                    val projection = getSystemService(MediaProjectionManager::class.java)
+                        ?.getMediaProjection(resultCode, resultData)
+                        ?: error(getString(R.string.error_projection_null))
+                    val capture = ProjectionCaptureEngine(
+                        scope = captureScope,
+                        format = CaptureFormat(
+                            sampleRate = preferences.sampleRate,
+                            channelCount = preferences.channelCount,
+                            bitRate = preferences.bitRate,
+                        ),
+                        outputDirectory = directory,
+                        encoder = preferences.encoder,
+                        baseName = baseName,
+                        segmentDurationMs = preferences.segmentDurationMs,
+                    )
+                    capture.attachProjection(projection)
+                    capture.start().getOrThrow()
+                    capture
+                }
+            }
+            startInFlight = false
+            attempt.fold(
+                onSuccess = { capture ->
+                    attachSession(capture)
+                    Log.i(TAG, "capture started scope=" + captureScope)
+                },
+                onFailure = { failure ->
+                    Log.w(TAG, "capture failed to start", failure)
+                    CaptureSession.fail(failure.message ?: "capture failed to start")
+                    shutdown()
+                },
+            )
         }
+    }
 
+    /** Publishes a running engine to the UI and shows the floating control. */
+    private fun attachSession(capture: ProjectionCaptureEngine) {
         engine = capture
-        serviceScope.launch { capture.state.collect(CaptureSession::onState) }
+        serviceScope.launch {
+            capture.state.collect { state ->
+                CaptureSession.onState(state)
+                // Every way a session can end lands here — including the
+                // projection being revoked, which ends it inside the engine
+                // rather than in this class. Without this the notification and
+                // the overlay kept running over a session that had stopped.
+                if (state is CaptureState.Finished) completeSession(state.handle)
+            }
+        }
         serviceScope.launch { capture.level.collect(CaptureSession::onLevel) }
         serviceScope.launch { capture.targetSilent.collect(CaptureSession::onTargetSilent) }
 
@@ -143,10 +202,27 @@ class CaptureService : Service() {
                 onOpen = { openApp() },
             ).also { it.show(System.currentTimeMillis()) }
         }
-        Log.i(
-            TAG,
-            "capture started scope=$scope uids=${(scope as? CaptureScope.OnlyApps)?.distinctUids.orEmpty()}",
-        )
+    }
+
+    /**
+     * A file name no existing recording shares.
+     *
+     * The stamp only has second resolution, and a second session can begin inside
+     * the same second (stop, then start again; or a restart after a revocation).
+     * The muxer opens the name it is given, so the earlier recording would be
+     * truncated in place.
+     */
+    private fun uniqueBaseName(directory: File): String {
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+        var baseName = "drecorder-" + stamp
+        var attempt = 2
+        while (attempt <= 999) {
+            val clash = directory.listFiles { file -> file.name.startsWith(baseName) }
+            if (clash.isNullOrEmpty()) return baseName
+            baseName = "drecorder-" + stamp + "-" + attempt
+            attempt++
+        }
+        return "drecorder-" + stamp + "-" + System.currentTimeMillis()
     }
 
     private fun openApp() {
@@ -160,27 +236,53 @@ class CaptureService : Service() {
     private fun finishSession(reason: StopReason) {
         overlay?.hide()
         overlay = null
-        val handle = engine?.stop(reason)
+        val stopping = engine
         engine = null
-        if (handle != null) {
-            Log.i(
-                TAG,
-                "capture finished reason=$reason files=${handle.files.size} " +
-                    "ms=${handle.durationMs} peakDbfs=${handle.peakDbfs} signal=${handle.everHadSignal}",
-            )
-            // A blocked source yields a valid but silent file; the sidecar marker is
-            // the only thing that lets the library say so (core-data SilentMarker).
-            // Every slice of a segmented session gets one.
-            val marker = SilentMarker(this)
-            handle.files.forEach { file -> marker.write(file.name, wasSilent = !handle.everHadSignal) }
-
-            // The waveform was computed while the audio was captured, so it is
-            // written to the cache now. The editor then opens instantly instead
-            // of decoding the whole recording again (DESIGN §12.4).
-            writePeaks(handle)
+        if (stopping == null) {
+            completeSession(null)
+            return
         }
+        // The stop joins the capture worker and flushes the encoder (up to a few
+        // seconds). On the main thread that freezes the notification and the
+        // overlay, and an ANR follows. The state collector above finishes the
+        // session when the engine reports it.
+        serviceScope.launch(Dispatchers.IO) { stopping.stop(reason) }
+    }
+
+    /**
+     * Runs once per session, whichever way it ended: writes the sidecar markers
+     * and the cached waveform, hands the handle to the UI and closes the service.
+     */
+    private fun completeSession(handle: RecordingHandle?) {
+        if (completed) return
+        completed = true
+        WaveformPrecompute.setCaptureActive(false)
         CaptureSession.onFinished(handle)
         shutdown()
+        if (handle == null) return
+        // Two files per recording (a silence marker and a cached waveform) is a
+        // handful of milliseconds on a good day, but this runs on the main thread
+        // that also drives the notification and the overlay, and a segmented
+        // session writes them for every slice. Off the main thread.
+        serviceScope.launch(Dispatchers.IO) { persist(handle) }
+    }
+
+    private fun persist(handle: RecordingHandle) {
+        Log.i(
+            TAG,
+            "capture finished reason=${handle.stopReason} files=${handle.files.size} " +
+                "ms=${handle.durationMs} peakDbfs=${handle.peakDbfs} signal=${handle.everHadSignal}",
+        )
+        // A blocked source yields a valid but silent file; the sidecar marker is
+        // the only thing that lets the library say so (core-data SilentMarker).
+        // Every slice of a segmented session gets one.
+        val marker = SilentMarker(this)
+        handle.files.forEach { file -> marker.write(file.name, wasSilent = !handle.everHadSignal) }
+
+        // The waveform was computed while the audio was captured, so it is
+        // written to the cache now. The editor then opens instantly instead
+        // of decoding the whole recording again (DESIGN §12.4).
+        writePeaks(handle)
     }
 
     /** Writes the cached waveform of every file the session produced. */
@@ -213,6 +315,21 @@ class CaptureService : Service() {
         return getExternalFilesDir(Environment.DIRECTORY_MUSIC) ?: filesDir
     }
 
+    /**
+     * A context that speaks the language chosen in the app.
+     *
+     * The service is not MainActivity and never sees the base context that the
+     * language switch installs, so the notification and the floating control
+     * would otherwise stay in the device language while the app was in another.
+     */
+    private fun localised(): Context {
+        val tag = UiPreferences.language(this)
+        if (tag.isEmpty()) return this
+        val configuration = Configuration(resources.configuration)
+        configuration.setLocale(Locale.forLanguageTag(tag))
+        return createConfigurationContext(configuration)
+    }
+
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
             CHANNEL_ID,
@@ -225,6 +342,7 @@ class CaptureService : Service() {
     }
 
     private fun buildNotification(): Notification {
+        val text = localised()
         val openApp = PendingIntent.getActivity(
             this,
             0,
@@ -239,11 +357,11 @@ class CaptureService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle(getString(R.string.notification_title))
-            .setContentText(getString(R.string.notification_text))
+            .setContentTitle(text.getString(R.string.notification_title))
+            .setContentText(text.getString(R.string.notification_text))
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentIntent(openApp)
-            .addAction(0, getString(R.string.notification_stop), stopCapture)
+            .addAction(0, text.getString(R.string.notification_stop), stopCapture)
             .setOngoing(true)
             .setSilent(true)
             .build()

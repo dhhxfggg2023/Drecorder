@@ -33,7 +33,33 @@ sealed interface UpdateDecision {
 /** Outcome of verifying a downloaded APK. Never "probably fine". */
 sealed interface VerificationResult {
     data object Ok : VerificationResult
-    data class Failed(val reason: String) : VerificationResult
+
+    /**
+     * A check did not pass.
+     *
+     * [reason] is the diagnostic detail (English, for the log and for anything
+     * the caller has no phrase for); [kind] is what the UI turns into a sentence
+     * in the user's language. A hash mismatch is a broken transfer, a
+     * certificate mismatch is somebody else's app, and telling them apart is the
+     * entire value of the message.
+     */
+    data class Failed(
+        val reason: String,
+        val kind: Kind = Kind.Unknown,
+    ) : VerificationResult {
+        enum class Kind {
+            /** The bytes do not hash to the manifest value. */
+            HashMismatch,
+
+            /** Signed by a different key than the installed app, or not signed. */
+            CertificateMismatch,
+
+            /** Not an upgrade, or the package cannot be read at all. */
+            NotAnUpgrade,
+
+            Unknown,
+        }
+    }
 }
 
 /**
@@ -78,19 +104,28 @@ fun verifyDownload(
     installedVersionCode: Long,
 ): VerificationResult {
     if (!expectedSha256.equals(actualSha256, ignoreCase = true)) {
-        return VerificationResult.Failed("sha256 mismatch")
+        return VerificationResult.Failed("sha256 mismatch", VerificationResult.Failed.Kind.HashMismatch)
     }
     if (installedCertSha256.isNullOrBlank()) {
-        return VerificationResult.Failed("installed signing certificate unavailable")
+        return VerificationResult.Failed(
+            "installed signing certificate unavailable",
+            VerificationResult.Failed.Kind.CertificateMismatch,
+        )
     }
     if (downloadedCertSha256.isNullOrBlank()) {
-        return VerificationResult.Failed("downloaded APK is not signed")
+        return VerificationResult.Failed(
+            "downloaded APK is not signed",
+            VerificationResult.Failed.Kind.CertificateMismatch,
+        )
     }
     if (!downloadedCertSha256.equals(installedCertSha256, ignoreCase = true)) {
-        return VerificationResult.Failed("signing certificate mismatch")
+        return VerificationResult.Failed(
+            "signing certificate mismatch",
+            VerificationResult.Failed.Kind.CertificateMismatch,
+        )
     }
     if (downloadedVersionCode <= installedVersionCode) {
-        return VerificationResult.Failed("not an upgrade")
+        return VerificationResult.Failed("not an upgrade", VerificationResult.Failed.Kind.NotAnUpgrade)
     }
     return VerificationResult.Ok
 }
@@ -99,6 +134,27 @@ fun verifyDownload(
 fun sha256Hex(bytes: ByteArray): String {
     val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
     return digest.joinToString(separator = "") { byte -> "%02x".format(byte) }
+}
+
+/**
+ * Lowercase hex SHA-256 of [file], hashed in 64 KB chunks.
+ *
+ * `sha256Hex(file.readBytes())` needed the whole APK in memory on top of the byte
+ * array it produced — over 100 MB for a 53 MB build. On a device that ran out, the
+ * OutOfMemoryError surfaced as "download failed", and the user was told the file
+ * was broken.
+ */
+fun sha256Hex(file: java.io.File): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    file.inputStream().use { input ->
+        val buffer = ByteArray(64 * 1024)
+        while (true) {
+            val read = input.read(buffer)
+            if (read <= 0) break
+            digest.update(buffer, 0, read)
+        }
+    }
+    return digest.digest().joinToString(separator = "") { byte -> "%02x".format(byte) }
 }
 
 internal fun String.isHexOfLength(length: Int): Boolean =

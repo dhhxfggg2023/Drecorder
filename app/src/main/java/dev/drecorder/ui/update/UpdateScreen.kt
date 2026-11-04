@@ -32,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.drecorder.R
+import dev.drecorder.data.UpdateSafety
 
 /** What the update screen is currently showing. */
 sealed interface UpdateUiState {
@@ -93,6 +94,14 @@ fun UpdateScreen(
     onOpenUnknownSources: () -> Unit,
     onManifestUrlChange: (String) -> Unit,
     onAutoCheckChange: (Boolean) -> Unit,
+    /**
+     * What installing this update would do to the recordings already on the
+     * phone. [UpdateSafety.PreservesData] is the normal case and shows nothing;
+     * everything else has to be visible *before* the download, because the
+     * consequence is an uninstall and the default recordings folder lives
+     * inside the app.
+     */
+    dataSafety: UpdateSafety = UpdateSafety.Unknown,
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     var urlDraft by remember(manifestUrl) { mutableStateOf(manifestUrl) }
@@ -150,9 +159,20 @@ fun UpdateScreen(
                                 stringResource(R.string.update_available, state.versionName),
                                 highlight = true,
                             )
+                            // `forced` was computed from the manifest's minimum supported
+                            // version, carried into this state — and never shown, so a
+                            // build that declared itself unsupported looked exactly like
+                            // an optional upgrade.
+                            if (state.forced) {
+                                StatusText(
+                                    stringResource(R.string.update_required),
+                                    highlight = true,
+                                )
+                            }
                             if (state.notes.isNotBlank()) {
                                 Text(text = state.notes, style = MaterialTheme.typography.bodySmall)
                             }
+                            DataSafetyNote(dataSafety)
                             Button(onClick = onDownload, modifier = Modifier.fillMaxWidth()) {
                                 Text(stringResource(R.string.update_download))
                             }
@@ -192,6 +212,7 @@ fun UpdateScreen(
                                 stringResource(R.string.update_available, state.versionName),
                                 highlight = true,
                             )
+                            DataSafetyNote(dataSafety)
                             if (!canInstallPackages) {
                                 Text(
                                     text = stringResource(R.string.update_unknown_sources),
@@ -286,6 +307,40 @@ fun UpdateScreen(
                 }
             }
         }
+    }
+}
+
+/**
+ * What the update does to the data already on the device.
+ *
+ * Only the two states that can cost something say anything: an in-place upgrade
+ * is the expected behaviour and does not need a paragraph, but "this cannot be
+ * installed over your app, you will have to uninstall first" is the one warning
+ * that has to arrive before the user taps anything.
+ */
+@Composable
+private fun DataSafetyNote(safety: UpdateSafety) {
+    when (safety) {
+        UpdateSafety.PreservesData -> Text(
+            text = stringResource(R.string.update_keeps_data),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        is UpdateSafety.RequiresUninstall -> {
+            Text(
+                text = stringResource(R.string.update_needs_uninstall),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            Text(
+                text = stringResource(R.string.update_backup_first),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+
+        UpdateSafety.Unknown -> Unit
     }
 }
 

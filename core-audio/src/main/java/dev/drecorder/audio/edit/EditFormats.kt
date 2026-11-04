@@ -12,34 +12,45 @@ package dev.drecorder.audio.edit
  */
 object EditFormats {
 
-    /**
-     * Why [other] cannot be spliced with [base], or null when they are compatible.
-     *
-     * The message names the concrete property, because "格式不一致" on its own
-     * leaves the user with nothing to act on.
-     */
-    fun describeMismatch(base: AudioFormatSpec, other: AudioFormatSpec): String? = when {
-        base.mimeType != other.mimeType ->
-            "编码格式不同（${base.mimeType} 与 ${other.mimeType}）"
+    /** The concrete property that makes two recordings impossible to splice. */
+    sealed interface Mismatch {
+        /** Container/codec differs, e.g. an AAC recording and a WAV one. */
+        data class Codec(val base: String, val other: String) : Mismatch
 
-        base.sampleRate != other.sampleRate ->
-            "采样率不同（${base.sampleRate} Hz 与 ${other.sampleRate} Hz）"
+        data class SampleRate(val base: Int, val other: Int) : Mismatch
 
-        base.channelCount != other.channelCount ->
-            "声道数不同（${base.channelCount} 与 ${other.channelCount}）"
-
-        else -> null
+        data class Channels(val base: Int, val other: Int) : Mismatch
     }
 
     /**
-     * The sources that cannot join [base], each with the reason. The base itself is
+     * Which property of [other] disagrees with [base], or null when they are
+     * compatible.
+     *
+     * It returns the *property*, not a sentence: this is a pure function in a
+     * module that has no resources, and the caller needs to name the property in
+     * the user's language. Returning a formatted Chinese sentence here was the
+     * reason the app could not be translated.
+     */
+    fun mismatch(base: AudioFormatSpec, other: AudioFormatSpec): Mismatch? = when {
+        base.mimeType != other.mimeType -> Mismatch.Codec(base.mimeType, other.mimeType)
+        base.sampleRate != other.sampleRate -> Mismatch.SampleRate(base.sampleRate, other.sampleRate)
+        base.channelCount != other.channelCount -> Mismatch.Channels(base.channelCount, other.channelCount)
+        else -> null
+    }
+
+    /** True when the two can be spliced without re-encoding. */
+    fun compatible(base: AudioFormatSpec, other: AudioFormatSpec): Boolean =
+        mismatch(base, other) == null
+
+    /**
+     * The sources that cannot join [base], with what disagrees. The base itself is
      * never reported: it is the reference every other source is compared against.
      */
     fun incompatible(
         base: AudioFormatSpec,
         others: List<Pair<String, AudioFormatSpec>>,
-    ): List<Pair<String, String>> =
+    ): List<Pair<String, Mismatch>> =
         others.mapNotNull { (name, spec) ->
-            describeMismatch(base, spec)?.let { reason -> name to reason }
+            mismatch(base, spec)?.let { reason -> name to reason }
         }
 }

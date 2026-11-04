@@ -144,6 +144,12 @@ object TrackPeaks {
             // The source is coarser than the output bucket — zoomed in on a
             // waveform that has not been decoded in detail yet. Take the bucket
             // this moment falls in, so the shape is blocky rather than missing.
+            //
+            // Only when the source really covers the moment: bucketIndexAt()
+            // clamps, so asking it about audio the source does not have (past the
+            // end of a window, or a stale decode while zooming) would paint the
+            // edge bucket over and over as if there were sound there.
+            if (sourceStartMs < peaks.offsetMs || sourceStartMs >= peaks.endMs) return
             val index = peaks.bucketIndexAt(sourceStartMs)
             low = peaks.minAt(index)
             high = peaks.maxAt(index)

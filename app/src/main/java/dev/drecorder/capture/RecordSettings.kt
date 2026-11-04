@@ -69,7 +69,11 @@ data class RecordSettings(
 
             return RecordSettings(
                 sampleRate = if (sampleRate == 44_100) 44_100 else 48_000,
-                channelCount = prefs.getInt(KEY_CHANNEL_COUNT, defaults.channelCount),
+                channelCount = prefs.getInt(KEY_CHANNEL_COUNT, defaults.channelCount)
+                    // CaptureFormat rejects anything but mono/stereo, and it
+                    // does so on the main thread inside the service: a stored
+                    // value from an older build must not become a crash.
+                    .takeIf { it == 1 || it == 2 } ?: defaults.channelCount,
                 // A changed AAC bit rate has to be reflected in the encoder spec too,
                 // otherwise the UI slider would silently do nothing.
                 bitRate = bitRate,

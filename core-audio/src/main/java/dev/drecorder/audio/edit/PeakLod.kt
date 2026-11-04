@@ -10,11 +10,14 @@ package dev.drecorder.audio.edit
  * user zoomed in shows a staircase; drawing the detail when the user zoomed out
  * shows noise (DESIGN §12.4).
  *
- * The rule here is the one every audio editor uses: **two buckets per screen
- * pixel**. Two, not one, because a column that holds a single bucket shows
- * exactly that bucket — a loud transient next to a silent one would be
- * averaged into one grey line. With two, the column always holds the extremes
- * of at least two buckets and the shape survives.
+ * The rule is **two buckets per drawn column**. Two, not one, because a column
+ * that holds a single bucket shows exactly that bucket — a loud transient next
+ * to a silent one would be averaged into one grey line. The count is per
+ * *column* (WaveformBins.MIN_COLUMN_PX), not per pixel: a column is several
+ * pixels wide, so this asks for far fewer buckets than a per-pixel rule would,
+ * and at the zooms the editor allows the whole-recording overview answers the
+ * question — the per-window decode path only wakes up for zooms narrower than
+ * the editor permits.
  *
  * The resolutions are a ladder rather than a continuum so that a given window
  * always asks for the same one: the same zoom level then always decodes the
@@ -47,9 +50,13 @@ object PeakLod {
      * sample and there is nothing left to see.
      */
     fun bucketsPerSecondFor(spanMs: Long, widthPx: Int): Int {
-        if (spanMs <= 0L || widthPx <= 0) return FINEST
-        // bucketsPerSecond * spanMs / 1000 >= 2 * widthPx
-        val required = (2L * widthPx * 1_000L + spanMs - 1L) / spanMs
+        // No width yet: the first composition runs before layout has measured the
+        // waveform, so there is nothing to fill. Answering FINEST here decoded a
+        // window that was thrown away one frame later (and cached it).
+        if (spanMs <= 0L || widthPx <= 0) return COARSE
+        // bucketsPerSecond * spanMs / 1000 >= 2 * columns
+        val columns = (widthPx + WaveformBins.MIN_COLUMN_PX - 1) / WaveformBins.MIN_COLUMN_PX
+        val required = (2L * columns * 1_000L + spanMs - 1L) / spanMs
         return LADDER.firstOrNull { it >= required } ?: FINEST
     }
 

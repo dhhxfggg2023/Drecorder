@@ -54,6 +54,16 @@ android {
     buildFeatures {
         compose = true
     }
+
+    // The language is chosen inside the app (see dev.drecorder.ui.UiPreferences), so
+    // every language has to be present in every install. Splitting by language
+    // would hand a phone set to English an APK without Chinese in it, and the
+    // switch in the settings would then silently fall back to English.
+    bundle {
+        language {
+            enableSplit = false
+        }
+    }
 }
 
 dependencies {

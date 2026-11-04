@@ -31,10 +31,36 @@ sealed interface EditExportResult {
         val transmuxed: Boolean,
     ) : EditExportResult
 
+    /**
+     * The export did not produce a file.
+     *
+     * [reason] is what the caller translates; [message] is the diagnostic detail
+     * for the log and for failures the caller has no phrase for. Keeping the two
+     * apart is what lets the editor say 「至少保留一段」 in the user's language
+     * while still reporting media3's error code when something unexpected breaks.
+     */
     data class Failure(
         val message: String,
         val cause: Throwable? = null,
-    ) : EditExportResult
+        val reason: Reason = Reason.Unknown,
+    ) : EditExportResult {
+        enum class Reason {
+            /** The plan is empty, or every clip in it has no audio. */
+            NothingToExport,
+
+            /** A source of the plan is not on disk (any more). */
+            SourceMissing,
+
+            /** The finished file could not be moved into place. */
+            RenameFailed,
+
+            /** media3 refused to start or failed mid-run. */
+            TransformFailed,
+
+            /** Anything else; [message] is the only thing to show. */
+            Unknown,
+        }
+    }
 }
 
 /**
@@ -64,12 +90,20 @@ class EditExporter(private val context: Context) {
         onProgress: ((Int) -> Unit)? = null,
     ): EditExportResult {
         if (plan.isEmpty) {
-            return EditExportResult.Failure("至少保留一段音频")
+            return EditExportResult.Failure(
+                "the plan has no audio",
+                reason = EditExportResult.Failure.Reason.NothingToExport,
+            )
         }
 
-        val source = plan.sources.first().file
-        if (!source.isFile) {
-            return EditExportResult.Failure("源文件已不存在")
+        // Every source, not just the first: a merge names several, and a missing
+        // one used to reach media3 and come back as a bare error code.
+        val missing = plan.sources.map { it.file }.firstOrNull { !it.isFile }
+        if (missing != null) {
+            return EditExportResult.Failure(
+                "source is gone: " + missing.name,
+                reason = EditExportResult.Failure.Reason.SourceMissing,
+            )
         }
 
         // Everything up to the transformer runs on the caller's thread, and the
@@ -80,7 +114,7 @@ class EditExporter(private val context: Context) {
         var temporary: File? = null
         var committed = false
         return try {
-            val output = destination ?: EditOutputNaming.outputFileFor(source)
+            val output = destination ?: EditOutputNaming.outputFileFor(plan.sources.first().file)
             val temp = EditOutputNaming.temporaryFileFor(output)
             temporary = temp
             runCatching { temp.delete() }
@@ -97,14 +131,28 @@ class EditExporter(private val context: Context) {
                 is TransformOutcome.Succeeded -> {
                     // The rename is the commit: until it happens the library cannot see
                     // the file, so an interrupted export leaves nothing behind.
-                    val renamed = runCatching {
+                            val renamed = runCatching {
                         if (!temp.renameTo(output)) {
-                            temp.copyTo(output, overwrite = true)
+                            // A rename cannot cross filesystems, so the fallback
+                            // copies. It copies to a name the library cannot
+                            // mistake for a recording and renames *that* into
+                            // place: a copy that dies halfway used to leave a
+                            // truncated file under the final, visible name.
+                            val staging = File(output.parentFile, "${output.name}.part")
+                            runCatching { staging.delete() }
+                            temp.copyTo(staging, overwrite = true)
+                            if (!staging.renameTo(output)) {
+                                staging.copyTo(output, overwrite = true)
+                                staging.delete()
+                            }
                             temp.delete()
                         }
                     }.isSuccess
                     if (!renamed) {
-                        EditExportResult.Failure("导出文件无法重命名")
+                        EditExportResult.Failure(
+                            "the exported file could not be moved into place",
+                            reason = EditExportResult.Failure.Reason.RenameFailed,
+                        )
                     } else {
                         committed = true
                         EditExportResult.Success(
@@ -215,7 +263,10 @@ class EditExporter(private val context: Context) {
                             val state = runCatching { transformer.getProgress(holder) }
                                 .getOrDefault(Transformer.PROGRESS_STATE_UNAVAILABLE)
                             if (state == Transformer.PROGRESS_STATE_AVAILABLE) {
-                                onProgress(holder.progress / 100)
+                                // The bar counts in percent all the way to the
+                                // screen: holder.progress is already 0..100, and
+                                // dividing here as well kept it at 0..1 forever.
+                                onProgress(holder.progress)
                             }
                             handler.postDelayed(this, PROGRESS_INTERVAL_MS)
                         }
@@ -229,7 +280,7 @@ class EditExporter(private val context: Context) {
                             .onFailure { failure ->
                                 continuation.resumeSafely(
                                     TransformOutcome.Failed(
-                                        message = failure.message ?: "导出启动失败",
+                                        message = failure.message ?: "the transformer refused to start",
                                         cause = failure,
                                     ),
                                 )

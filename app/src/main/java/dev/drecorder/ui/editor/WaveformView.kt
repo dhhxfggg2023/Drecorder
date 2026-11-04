@@ -21,6 +21,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -189,6 +190,11 @@ fun WaveformView(
                     )
                     var lastX = down.position.x
                     var mode = GestureMode.UNDECIDED
+                    // Tracked separately from [mode]: a second finger turns the
+                    // gesture into a pinch, which used to leave the drag flag set
+                    // for ever. The follow loop then refused to move the window
+                    // again until the user completed a fresh drag.
+                    var dragged = false
 
                     while (true) {
                         val event = awaitPointerEvent()
@@ -215,6 +221,7 @@ fun WaveformView(
                                 abs(change.position.x - down.position.x) > viewConfiguration.touchSlop
                             ) {
                                 mode = GestureMode.DRAG
+                                dragged = true
                                 // The editor has to know that a drag started, not
                                 // just that one ended: while the finger moves the
                                 // recording, the playhead must not also drag the
@@ -244,8 +251,12 @@ fun WaveformView(
                     // The editor has to know that the finger is down: while
                     // it is, the playhead does not drive the window, because
                     // the finger already does.
+                    // Cleared for any gesture that ever became a drag, whatever
+                    // it ended as. Guarding on `mode == DRAG` left the flag set
+                    // when a second finger joined mid-drag.
+                    if (dragged) draggingChanged(false)
+
                     if (mode == GestureMode.DRAG) {
-                        draggingChanged(false)
                         // The finger let go while still moving: the timeline
                         // keeps going at that speed and slows down, the way a
                         // scroll does everywhere else.
@@ -285,6 +296,18 @@ fun WaveformView(
                 }
             },
     ) {
+        // What one drawn column covers, and the columns themselves.
+        //
+        // Both depend on the data, the span and the width — never on the playhead
+        // — so they are decided here, in composition. The columns are then reused
+        // between frames: the draw block runs on every playhead tick, and
+        // rebinning the whole span sixty times a second is what made a long
+        // recording stutter while it played.
+        val columnMs = remember(peaks, spanMs, widthPx) {
+            WaveformBins.stepMs(peaks, spanMs, widthPx)
+        }
+        val bars = remember { BarCache() }
+
         Canvas(modifier = Modifier.fillMaxWidth().fillMaxHeight()) {
             if (widthPx <= 0) return@Canvas
             // The one place the playhead is read: inside the draw block. A
@@ -296,13 +319,12 @@ fun WaveformView(
             // bucket: finer than that is the same bucket repeated across several
             // pixels, which is what made a zoomed-in waveform a row of
             // rectangles instead of peaks (2026-10-23).
-            val columnMs = WaveformBins.stepMs(peaks, spanMs, widthPx)
             val alignedStartMs = WaveformBins.gridStart(startMs, columnMs)
             // One extra column for the part scrolled off the left edge, one for
             // the part coming in on the right, and a margin so the rounding of
             // the pixel width never leaves a gap at the end.
             val barCount = ((spanMs / columnMs).toInt() + 3).coerceAtLeast(1)
-            val columns = WaveformBins.buildBars(peaks, alignedStartMs, columnMs, barCount)
+            val columns = bars.columnsFor(peaks, alignedStartMs, columnMs, barCount)
             // Where those columns land on screen — a column is [stepPx] wide, not
             // necessarily one pixel.
             val stepPx = if (spanMs > 0L) {
@@ -456,14 +478,17 @@ private const val MARKER_FLAG_PX = 24f
 private const val FLING_MIN_SPEED_PX_PER_S = 120f
 
 /**
- * The waveform as one filled outline.
+ * The waveform as thin matchsticks.
  *
- * Each column puts the top of the shape at its loudest sample and the bottom at
- * its quietest, and consecutive columns are joined, so the result is a
- * continuous shape rather than a row of separate bars (「波形要连续，不要离散图像」,
- * 2026-10-23). Columns with no audio in them break the shape instead of being
- * drawn as silence: past the end of the recording there is nothing to draw, and
- * a flat line there would claim there is.
+ * One vertical stick per column, from the quietest sample the column holds to
+ * the loudest, mirrored around the centre line — the way every ordinary recorder
+ * draws sound. The filled outline this replaced joined neighbouring columns into
+ * one continuous body, and the user rejected it twice over: first as discrete
+ * blocks when the columns were coarse (2026-10-23), then as a blob when they
+ * were joined (「波形不要边缘连续，不好看，细火柴棍就行」, 2026-11-04). Sticks are
+ * what was asked for both times: the quietest-to-loudest span is the honest
+ * content of the column, and a silent stretch reads as a thin line on the
+ * centre instead of a filled slab claiming there is sound.
  *
  * Pure drawing: the column data and the shift are computed by the caller.
  */
@@ -477,49 +502,26 @@ private fun DrawScope.drawEnvelope(
 ) {
     if (columns.count == 0) return
 
-    // The shape is mirrored around the centre line, the way every ordinary
-    // recorder draws sound, and it is drawn from the column's **mean** loudness
-    // rather than its loudest sample: speech is nearly full-scale in almost
-    // every bucket, so a peak envelope comes out as a solid block at far zoom
-    // （「缩放到最小波形的高低差特别大，很奇怪」, 2026-10-23), while the mean keeps
-    // the contour and still reaches the peaks when a column is one bucket wide.
-    fun amplitude(index: Int): Float =
-        (columns.levels[index] / 32768f).coerceIn(0f, 1f) * halfHeight
-
-    fun fillRun(from: Int, to: Int) {
-        val path = Path()
-        for (index in from..to) {
-            val x = index * stepPx - shiftPx
-            val y = midY - amplitude(index)
-            if (index == from) path.moveTo(x, y) else path.lineTo(x, y)
-        }
-        for (index in to downTo from) {
-            val x = index * stepPx - shiftPx
-            path.lineTo(x, midY + amplitude(index))
-        }
-        path.close()
-        // A slightly translucent body under a solid outline: the fill reads as
-        // the sound, the edge reads as where the peak is, sharp instead of a
-        // blur of half-covered pixels.
-        drawPath(path, color = color.copy(alpha = 0.72f))
-        drawPath(path, color = color, style = Stroke(width = 1f))
-    }
-
-    var runStart = -1
-    var index = 0
-    while (index <= columns.count) {
-        val empty = index == columns.count || columns.mins[index] == Int.MAX_VALUE
-        if (empty) {
-            if (runStart >= 0) {
-                fillRun(runStart, index - 1)
-                runStart = -1
-            }
-        } else if (runStart < 0) {
-            runStart = index
-        }
-        index++
+    for (index in 0 until columns.count) {
+        // A column with no decoded audio draws nothing: past the end of the
+        // recording there is nothing to claim.
+        if (columns.mins[index] == Int.MAX_VALUE) continue
+        val x = index * stepPx - shiftPx
+        if (x < -STICK_WIDTH_PX || x > size.width + STICK_WIDTH_PX) continue
+        val low = (columns.mins[index] / 32768f).coerceIn(-1f, 1f) * halfHeight
+        val high = (columns.maxs[index] / 32768f).coerceIn(-1f, 1f) * halfHeight
+        drawLine(
+            color = color,
+            start = Offset(x, midY + low),
+            end = Offset(x, midY + high),
+            strokeWidth = STICK_WIDTH_PX,
+            cap = StrokeCap.Round,
+        )
     }
 }
+
+/** How wide one matchstick is drawn, in pixels. */
+private const val STICK_WIDTH_PX = 2f
 
 /**
  * The marker within reach of a touch, or null.
@@ -628,7 +630,10 @@ private fun DrawScope.drawRuler(
             )
             // Measured once per label value, not once per frame: text layout is
             // the most expensive thing in this draw block, and the labels are
-            // the same strings every frame.
+            // the same strings every frame. The map is capped: every zoom level
+            // and every scroll position produces new label values, and an
+            // unbounded map of laid-out text would follow the screen around.
+            if (labels.size > MAX_RULER_LABELS) labels.clear()
             val layout = labels.getOrPut(tick) {
                 textMeasurer.measure(formatClock(tick), style)
             }
@@ -657,4 +662,44 @@ internal fun formatClock(ms: Long): String {
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     return "%02d:%02d".format(minutes, seconds)
+}
+
+/** How many laid-out ruler labels are kept before the cache is thrown away. */
+private const val MAX_RULER_LABELS = 512
+
+/**
+ * Keeps the built columns between frames.
+ *
+ * The waveform is rebuilt inside the draw lambda, which runs once per playhead
+ * tick. While the user is listening or simply looking, the data, the width and
+ * the column grid do not change — only the pixel shift does — so the same
+ * columns are built again and again. This holds the last set and hands it back
+ * when nothing that shapes it has moved.
+ */
+private class BarCache {
+
+    private var peaks: PeakData? = null
+    private var startMs: Long = Long.MIN_VALUE
+    private var columnMs: Long = -1L
+    private var count: Int = -1
+    private var columns: WaveformColumns? = null
+
+    fun columnsFor(peaks: PeakData, startMs: Long, columnMs: Long, count: Int): WaveformColumns {
+        val cached = columns
+        if (cached != null &&
+            peaks === this.peaks &&
+            startMs == this.startMs &&
+            columnMs == this.columnMs &&
+            count == this.count
+        ) {
+            return cached
+        }
+        val built = WaveformBins.buildBars(peaks, startMs, columnMs, count)
+        this.peaks = peaks
+        this.startMs = startMs
+        this.columnMs = columnMs
+        this.count = count
+        columns = built
+        return built
+    }
 }

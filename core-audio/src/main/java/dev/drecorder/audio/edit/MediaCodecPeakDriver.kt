@@ -161,7 +161,7 @@ class PeakDecoder(
         onPartial: ((PeakData) -> Unit)?,
         cancelled: AtomicBoolean,
     ): Result {
-        if (!file.isFile) return Result.Failure("文件已不存在")
+        if (!file.isFile) return Result.Failure("file is gone")
         val totalMs = durationOf(file) ?: return decodeInternal(
             file,
             null,
@@ -178,7 +178,7 @@ class PeakDecoder(
         val assembly = PeakAssembly(bucketsPerSecond, totalMs)
         var start = 0L
         while (start < totalMs) {
-            if (cancelled.get()) return Result.Failure("已取消", reason = Reason.Cancelled)
+            if (cancelled.get()) return Result.Failure("cancelled", reason = Reason.Cancelled)
             val end = (start + SEGMENT_MS).coerceAtMost(totalMs)
             val segmentStart = start
             val segment = decodeInternal(
@@ -248,7 +248,7 @@ class PeakDecoder(
         onProgress: ((Int) -> Unit)? = null,
         cancelled: AtomicBoolean = AtomicBoolean(false),
     ): Result {
-        if (endMs <= startMs) return Result.Failure("时间范围为空")
+        if (endMs <= startMs) return Result.Failure("empty time range")
         val window = PeakWindow(startMs * 1_000L, endMs * 1_000L)
         return decodeInternal(file, window, bucketsPerSecond, onProgress, cancelled)
     }
@@ -260,7 +260,7 @@ class PeakDecoder(
         onProgress: ((Int) -> Unit)?,
         cancelled: AtomicBoolean,
     ): Result {
-        if (!file.isFile) return Result.Failure("文件已不存在")
+        if (!file.isFile) return Result.Failure("file is gone")
 
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
@@ -278,12 +278,12 @@ class PeakDecoder(
                 break
             }
             if (trackIndex < 0 || format == null) {
-                return Result.Failure("没有音频轨道")
+                return Result.Failure("no audio track")
             }
 
             val sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
             val channelCount = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-            val mime = format.getString(MediaFormat.KEY_MIME) ?: return Result.Failure("音频格式未知")
+            val mime = format.getString(MediaFormat.KEY_MIME) ?: return Result.Failure("unknown audio format")
             val durationUs = format.getLong(MediaFormat.KEY_DURATION, 0L)
 
             extractor.selectTrack(trackIndex)
@@ -331,13 +331,13 @@ class PeakDecoder(
                 }
 
                 PeakDecodeOutcome.Cancelled ->
-                    Result.Failure("已取消", reason = Reason.Cancelled)
+                    Result.Failure("cancelled", reason = Reason.Cancelled)
 
                 PeakDecodeOutcome.Stalled ->
-                    Result.Failure("解码器没有响应", reason = Reason.Stalled)
+                    Result.Failure("the decoder stopped responding", reason = Reason.Stalled)
             }
         } catch (failure: Exception) {
-            Result.Failure(failure.message ?: "解码失败", failure)
+            Result.Failure(failure.message ?: "decode failed", failure)
         } finally {
             runCatching { codec?.stop() }
             runCatching { codec?.release() }
@@ -387,7 +387,7 @@ class PeakDecoder(
     ): Result {
         val format = extractor.getTrackFormat(trackIndex)
         val mime = format.getString(MediaFormat.KEY_MIME)
-            ?: return Result.Failure("音频格式未知")
+            ?: return Result.Failure("unknown audio format")
         val durationUs = format.getLong(MediaFormat.KEY_DURATION, 0L)
         val codec = MediaCodec.createDecoderByType(mime)
         return try {
@@ -414,16 +414,16 @@ class PeakDecoder(
                 }
 
                 is PeakDecodeOutcome.FormatMismatch ->
-                    Result.Failure("音频格式与文件不符")
+                    Result.Failure("the decoder format does not match the file")
 
                 PeakDecodeOutcome.Cancelled ->
-                    Result.Failure("已取消", reason = Reason.Cancelled)
+                    Result.Failure("cancelled", reason = Reason.Cancelled)
 
                 PeakDecodeOutcome.Stalled ->
-                    Result.Failure("解码器没有响应", reason = Reason.Stalled)
+                    Result.Failure("the decoder stopped responding", reason = Reason.Stalled)
             }
         } catch (failure: Exception) {
-            Result.Failure(failure.message ?: "解码失败", failure)
+            Result.Failure(failure.message ?: "decode failed", failure)
         } finally {
             runCatching { codec.stop() }
             runCatching { codec.release() }

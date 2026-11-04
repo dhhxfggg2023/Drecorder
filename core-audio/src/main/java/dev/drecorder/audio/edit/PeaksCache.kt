@@ -19,7 +19,35 @@ import java.io.IOException
 object PeaksCache {
 
     private const val MAGIC = 0x4452504B // "DRPK"
+
+    /**
+     * The overview cache — the one written while a recording is being made —
+     * has been bucketed the same way since version 2, and that bucketing was
+     * never wrong: the samples arrive in order from the very first frame, so
+     * there is no decoder offset to fold in. Keeping this version at 2 is what
+     * lets recordings made by older builds open instantly instead of being
+     * re-decoded from scratch (「加载从左到右，不要取间隔加载」, 2026-11-04 — the
+     * wholesale version bump made every old recording crawl back in).
+     */
     private const val VERSION = 2
+
+    /**
+     * The **window** cache version is separate, because that is where the
+     * bucketing changed: version 3 buckets window samples by the decoder's
+     * presentation time instead of by the order they arrived. Every window
+     * decoded before this change carries a decoder-dependent horizontal offset
+     * — up to a frame plus an AAC priming delay — and adjacent windows
+     * disagreed with each other, so a zoomed-in waveform jumped sideways
+     * whenever the display moved from one cached window to the next. The
+     * caches are disposable; the version byte is what retires them.
+     */
+    private const val WINDOW_VERSION = 3
+
+    /** Magic + version + four ints + offsetUs + source size + source mtime. */
+    private const val HEADER_BYTES = 48L
+
+    /** Two `short` per bucket. */
+    private const val BYTES_PER_BUCKET = 4L
 
     /**
      * The cache file for [recording].
@@ -87,13 +115,25 @@ object PeaksCache {
      * process killed mid-write cannot leave a half-written cache that would
      * be read back as valid.
      */
+    /** Writes a whole-recording overview cache. */
     @Throws(IOException::class)
     fun write(file: File, data: PeakData, source: File) {
-        val temporary = File(file.parentFile, "${file.name}.tmp")
+        writeVersioned(file, data, source, VERSION)
+    }
+
+    /** Writes a window cache, stamped with the window bucketing's version. */
+    @Throws(IOException::class)
+    fun writeWindow(file: File, data: PeakData, source: File) {
+        writeVersioned(file, data, source, WINDOW_VERSION)
+    }
+
+    @Throws(IOException::class)
+    private fun writeVersioned(file: File, data: PeakData, source: File, version: Int) {
+        val temporary = File(file.parentFile, file.name + ".tmp")
         temporary.parentFile?.mkdirs()
         DataOutputStream(temporary.outputStream().buffered()).use { out ->
             out.writeInt(MAGIC)
-            out.writeInt(VERSION)
+            out.writeInt(version)
             out.writeInt(data.sampleRate)
             out.writeInt(data.channelCount)
             out.writeInt(data.bucketsPerSecond)
@@ -120,12 +160,18 @@ object PeaksCache {
      * Returns `null` for a missing, unreadable, malformed or stale cache — in
      * every one of those cases the caller should decode the recording again.
      */
-    fun read(file: File, source: File): PeakFile? {
+    /** Reads a whole-recording overview cache. */
+    fun read(file: File, source: File): PeakFile? = readVersioned(file, source, VERSION)
+
+    /** Reads a window cache, accepting only the window bucketing's version. */
+    fun readWindow(file: File, source: File): PeakFile? = readVersioned(file, source, WINDOW_VERSION)
+
+    private fun readVersioned(file: File, source: File, expectedVersion: Int): PeakFile? {
         if (!file.isFile) return null
         return try {
             DataInputStream(file.inputStream().buffered()).use { input ->
                 if (input.readInt() != MAGIC) return null
-                if (input.readInt() != VERSION) return null
+                if (input.readInt() != expectedVersion) return null
                 val sampleRate = input.readInt()
                 val channelCount = input.readInt()
                 val bucketsPerSecond = input.readInt()
@@ -136,6 +182,12 @@ object PeaksCache {
                 if (sampleRate <= 0 || channelCount <= 0 || bucketsPerSecond <= 0 || bucketCount < 0) {
                     return null
                 }
+                // The bucket count is a number from a file that may have been
+                // truncated or corrupted: without this ceiling it would be an
+                // allocation request, and an OutOfMemoryError is not caught by
+                // the IOException handler below — it kills the editor.
+                val available = (file.length() - HEADER_BYTES).coerceAtLeast(0L)
+                if (bucketCount.toLong() * BYTES_PER_BUCKET > available) return null
                 val mins = ShortArray(bucketCount)
                 val maxs = ShortArray(bucketCount)
                 for (index in 0 until bucketCount) mins[index] = input.readShort()

@@ -33,7 +33,21 @@ class UpdateInstaller(private val context: Context) {
             .apply { mkdirs() }
 
     fun fileFor(manifest: UpdateManifest): File =
-        File(downloadDirectory(), "drecorder-${manifest.versionName}.apk")
+        File(downloadDirectory(), "drecorder-" + safeVersionName(manifest.versionName) + ".apk")
+
+    /**
+     * The version name reduced to something that cannot leave the download
+     * directory.
+     *
+     * The manifest is fetched over the network, so `versionName` is remote input
+     * that used to become a path segment verbatim: a value such as
+     * `../../../x` wrote outside the folder. Nothing but letters, digits, dots,
+     * dashes and underscores survives.
+     */
+    private fun safeVersionName(versionName: String): String =
+        versionName.filter { it.isLetterOrDigit() || it == '.' || it == '-' || it == '_' }
+            .take(64)
+            .ifBlank { "update" }
 
     /**
      * Enqueues the download and calls [onComplete] with the local file once the
@@ -76,10 +90,16 @@ class UpdateInstaller(private val context: Context) {
     suspend fun await(
         downloadId: Long,
         pollIntervalMs: Long = 1_000L,
+        timeoutMs: Long = DEFAULT_TIMEOUT_MS,
         onProgress: ((downloaded: Long, total: Long) -> Unit)? = null,
     ): File = withContext(Dispatchers.IO) {
         val manager = appContext.getSystemService(DownloadManager::class.java)
-        while (true) {
+        // Bounded: a download the system parks in PENDING or PAUSED (no network,
+        // metered connection, user paused it in the shade) never reports success
+        // or failure, and the old `while (true)` left the screen saying
+        // 「下载中」 for as long as the app lived.
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
             val row = manager.query(DownloadManager.Query().setFilterById(downloadId))?.use { cursor ->
                 if (!cursor.moveToFirst()) {
                     null
@@ -107,12 +127,17 @@ class UpdateInstaller(private val context: Context) {
 
             when (current.status) {
                 DownloadManager.STATUS_SUCCESSFUL -> return@withContext localFileFor(downloadId)
-                DownloadManager.STATUS_FAILED -> error("download failed")
+                DownloadManager.STATUS_FAILED -> {
+                    // Removed so a failed request does not stay in the shade and
+                    // in the manager's list forever.
+                    runCatching { manager.remove(downloadId) }
+                    error("download failed")
+                }
                 else -> delay(pollIntervalMs)
             }
         }
-        @Suppress("UNREACHABLE_CODE")
-        error("unreachable")
+        runCatching { manager.remove(downloadId) }
+        error("download timed out")
     }
 
     /** One row of a download query. */
@@ -145,7 +170,13 @@ class UpdateInstaller(private val context: Context) {
                 null
             }
         }
-        return name?.let { File(downloadDirectory(), it) } ?: downloadDirectory()
+        // Returning the directory itself (the old fallback) meant the verifier was
+        // asked to hash a folder and the installer to open one; failing loudly says
+        // what actually went wrong.
+        val fileName = name ?: error("download file name unavailable")
+        val file = File(downloadDirectory(), fileName)
+        if (!file.isFile) error("download file missing: $fileName")
+        return file
     }
 
     /**
@@ -157,11 +188,16 @@ class UpdateInstaller(private val context: Context) {
     fun install(apk: File, manifest: UpdateManifest): Boolean {
         if (!appContext.packageManager.canRequestPackageInstalls()) return false
 
-        val uri = FileProvider.getUriForFile(
-            appContext,
-            "${appContext.packageName}.fileprovider",
-            apk,
-        )
+        // A FileProvider whose paths do not cover the APK throws here, on whatever
+        // thread called install — which used to kill the app instead of failing the
+        // install with a message.
+        val uri = runCatching {
+            FileProvider.getUriForFile(
+                appContext,
+                "${appContext.packageName}.fileprovider",
+                apk,
+            )
+        }.getOrNull() ?: return false
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, "application/vnd.android.package-archive")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -184,4 +220,9 @@ class UpdateInstaller(private val context: Context) {
         Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
     fun allCandidates(manifest: UpdateManifest): List<String> = manifest.downloadCandidates()
+
+    private companion object {
+        /** How long a download may stay unfinished before it is reported as failed. */
+        const val DEFAULT_TIMEOUT_MS = 30 * 60_000L
+    }
 }

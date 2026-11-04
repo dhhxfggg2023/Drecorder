@@ -1,5 +1,7 @@
 package dev.drecorder.ui.editor
 
+import android.os.Handler
+import android.os.Looper
 import android.widget.Toast
 import androidx.compose.animation.core.FloatExponentialDecaySpec
 import androidx.compose.animation.core.animateDecay
@@ -51,12 +53,14 @@ import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.drecorder.R
 import dev.drecorder.audio.edit.AudioFormatProbe
 import dev.drecorder.audio.edit.AudioFormatSpec
+import dev.drecorder.audio.edit.EditFormats
 import dev.drecorder.audio.edit.EditClip
 import dev.drecorder.audio.edit.EditCursor
 import dev.drecorder.audio.edit.EditExportResult
@@ -69,8 +73,10 @@ import dev.drecorder.audio.edit.EditTrack
 import dev.drecorder.audio.edit.PeakData
 import dev.drecorder.audio.edit.PeakDecoder
 import dev.drecorder.audio.edit.PeakLod
+import dev.drecorder.audio.edit.PlayheadClock
 import dev.drecorder.audio.edit.PeaksCache
 import dev.drecorder.audio.edit.TrackPeaks
+import dev.drecorder.data.DerivedMarker
 import dev.drecorder.data.Recording
 import dev.drecorder.data.formatDuration
 import dev.drecorder.playback.EditPreviewPlayer
@@ -79,6 +85,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -96,8 +103,6 @@ private data class Waveform(
     val durationMs: Long,
     val peaks: PeakData? = null,
     val loading: Boolean = false,
-    /** How far the waveform generation has got, 0..100; -1 when not known. */
-    val progress: Int = -1,
     val error: String? = null,
 )
 
@@ -114,7 +119,16 @@ private sealed interface PendingEdit {
 
     data class Repeat(val segment: EditSegment) : PendingEdit
 
-    data class Overwrite(val name: String) : PendingEdit
+    /**
+     * Replace one recording on disk with the result.
+     *
+     * [file] is the recording that gets replaced — always the file the user was
+     * shown in the dialog. It is *not* "the first clip" any more: overwriting the
+     * first source of a merge wrote the whole merged track over one of its own
+     * inputs, which silently destroyed that recording and left the result
+     * pointing at itself.
+     */
+    data class Overwrite(val name: String, val file: File) : PendingEdit
 }
 
 /**
@@ -137,11 +151,27 @@ fun EditorScreen(
     /** Lists the recordings that can be appended to this session. */
     loadLibrary: suspend () -> List<Recording> = { emptyList() },
 ) {
+    // Text comes from `LocalResources`, not from the context: a string read
+    // through the context is cached against the configuration it was created
+    // with, so after a language change the screen kept the old language
+    // (Lint's LocalContextGetResourceValueCall, 17 hits across the app).
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
 
     var clips by remember { mutableStateOf(emptyList<EditClip>()) }
     var waveforms by remember { mutableStateOf(emptyMap<String, Waveform>()) }
+
+    /**
+     * How far each whole-recording decode has got, 0..100.
+     *
+     * Kept apart from [waveforms] on purpose: [waveforms] is what the track
+     * envelope is built from, and writing a progress tick into it rebuilt that
+     * envelope — a fresh multi-hundred-kilobyte array per percent, per
+     * recording — which is what made a first open of a long recording feel
+     * like wading through mud while the bar crawled.
+     */
+    var decodeProgress by remember { mutableStateOf(emptyMap<String, Int>()) }
 
     /**
      * Where the playhead is, in track time — and, with [viewportSpanMs], the
@@ -204,6 +234,14 @@ fun EditorScreen(
     var insertCandidates by remember { mutableStateOf<List<Recording>?>(null) }
 
     val decodeCancelled = remember { AtomicBoolean(false) }
+    /**
+     * Scope for work that must die with the screen.
+     *
+     * [rememberCoroutineScope] is cancelled on dispose as well, but the decode
+     * path also needs to be cancelled from [DisposableEffect] before the player
+     * is released, so it gets a scope of its own.
+     */
+    val waveformScope = rememberCoroutineScope()
     val previewPlayer = remember { EditPreviewPlayer(context) }
     val exporter = remember { EditExporter(context) }
 
@@ -246,7 +284,6 @@ fun EditorScreen(
                 displayName = recording.displayName,
                 durationMs = recording.durationMs,
                 loading = true,
-                progress = 0,
             )
             )
 
@@ -267,11 +304,7 @@ fun EditorScreen(
             PeakDecoder().decode(
                 file = recording.file,
                 onProgress = { percent ->
-                    scope.launch {
-                        val known = waveforms[key]
-                            ?: Waveform(recording.displayName, recording.durationMs)
-                        waveforms = waveforms + (key to known.copy(progress = percent))
-                    }
+                    scope.launch { decodeProgress = decodeProgress + (key to percent) }
                 },
                 // A long recording is decoded in segments, and the waveform of
                 // the part already done is handed over after every segment: the
@@ -306,10 +339,10 @@ fun EditorScreen(
                     displayName = recording.displayName,
                     durationMs = recording.durationMs,
                     error = when (decoded.reason) {
-                        PeakDecoder.Reason.Cancelled -> context.getString(
+                        PeakDecoder.Reason.Cancelled -> resources.getString(
                             R.string.editor_waveform_cancelled,
                         )
-                        PeakDecoder.Reason.Stalled -> context.getString(
+                        PeakDecoder.Reason.Stalled -> resources.getString(
                             R.string.editor_waveform_stalled,
                         )
                         PeakDecoder.Reason.Unknown -> decoded.message
@@ -334,12 +367,17 @@ fun EditorScreen(
         val length = EditTrack.totalMs(clips)
         viewportSpanMs = EditMarkerPlan.initialSpanMs(length)
         playheadMs = 0L
-        recordings.forEach { recording -> launch { ensureWaveform(recording) } }
     }
 
     DisposableEffect(Unit) {
         onDispose {
+            // Closing the editor has to stop the work it started: a full decode
+            // of a long recording is minutes of MediaCodec, and leaving it
+            // running kept the CPU busy and the file open after the screen was
+            // gone. Cancelling the scope is what actually awaits the decoder;
+            // the flag alone is only checked between reads.
             decodeCancelled.set(true)
+            waveformScope.coroutineContext.cancelChildren(CancellationException("editor closed"))
             previewPlayer.release()
         }
     }
@@ -377,15 +415,68 @@ fun EditorScreen(
     }
 
     /** The detail waveforms decoded for [detailStartMs], per recording. */
-    var detailPeaks by remember { mutableStateOf(emptyMap<String, PeakData>()) }
+    // Keyed on the track and the resolution as well as being plain state: data
+    // decoded for the previous track, or at the previous rung of the zoom ladder,
+    // must not be mistaken for coverage of the current request.
+    var detailPeaks by remember(clips, detailBuckets) {
+        mutableStateOf(emptyMap<String, PeakData>())
+    }
+
+    /**
+     * The stretch the current [detailPeaks] actually covers, in track time.
+     *
+     * A decode is only skipped when the data on hand covers the whole requested
+     * window: drawing from a window that ends mid-screen would punch a hole, so
+     * coverage has to be exact, not "close enough".
+     */
+    var decodedFromMs by remember(clips, detailBuckets) { mutableStateOf(Long.MIN_VALUE) }
+    var decodedUntilMs by remember(clips, detailBuckets) { mutableStateOf(Long.MIN_VALUE) }
+
+    /**
+     * The whole-recording decode runs only when the overview is what is on
+     * screen.
+     *
+     * Zoomed in, what the eye needs is the visible stretch, and that comes from
+     * the detail path below — decoding the entire recording up front made
+     * opening one wait for all of it, which is the exact opposite of what a
+     * person opening a recording wants (「波形加载不应该一次性全部加载，应该先加载
+     * 我正在看的」). Zoomed out past the detail ladder, the 10 ms overview buckets
+     * are the picture, so that is when the whole file is decoded — progressively,
+     * with what is done showing up as it goes.
+     *
+     * It runs in [waveformScope] rather than this effect's scope, so a zoom
+     * change does not kill a decode half-way and restart it from nothing.
+     */
+    LaunchedEffect(clips, wantsDetail, recordings, viewportSpanMs) {
+        if (viewportSpanMs <= 0L) return@LaunchedEffect
+        if (wantsDetail) return@LaunchedEffect
+        recordings.forEach { recording ->
+            waveformScope.launch { ensureWaveform(recording) }
+        }
+    }
 
     LaunchedEffect(clips, wantsDetail, detailBuckets, detailStartMs) {
         if (!wantsDetail) {
             detailPeaks = emptyMap()
+            decodedFromMs = Long.MIN_VALUE
+            decodedUntilMs = Long.MIN_VALUE
             return@LaunchedEffect
         }
         val fromMs = detailStartMs
-        val toMs = fromMs + detailPageMs * 3
+        // Six pages, not the three the screen needs: the window is wide enough
+        // that the playhead takes several pages to walk out of it, so a decode
+        // serves several page changes before the next one is due.
+        val toMs = fromMs + detailPageMs * 6
+        // The screen is what has to be covered, not the requested window: the
+        // request advances with the playhead, so asking "is my request inside
+        // the data" re-decoded on every page change even when nothing on screen
+        // needed it. Asking "is the screen inside the data" decodes only when
+        // the playhead has actually walked to the edge of what is decoded.
+        if (playheadMs - detailPageMs >= decodedFromMs &&
+            playheadMs + detailPageMs <= decodedUntilMs
+        ) {
+            return@LaunchedEffect
+        }
         // One bucket of the requested resolution is the unit the window is
         // rounded to, so the same page always decodes the same audio and the
         // cache hits when the user comes back to it.
@@ -403,7 +494,7 @@ fun EditorScreen(
                 startMs = startMs,
                 spanMs = endMs - startMs,
             )
-            val cached = withContext(Dispatchers.IO) { PeaksCache.read(cacheFile, file) }
+            val cached = withContext(Dispatchers.IO) { PeaksCache.readWindow(cacheFile, file) }
             if (cached != null) {
                 decoded[file.path] = cached.data
                 continue
@@ -418,11 +509,13 @@ fun EditorScreen(
             if (result is PeakDecoder.Result.Success) {
                 decoded[file.path] = result.data
                 withContext(Dispatchers.IO) {
-                    runCatching { PeaksCache.write(cacheFile, result.data, file) }
+                    runCatching { PeaksCache.writeWindow(cacheFile, result.data, file) }
                 }
             }
         }
         detailPeaks = decoded
+        decodedFromMs = fromMs
+        decodedUntilMs = toMs
         withContext(Dispatchers.IO) { runCatching { PeaksCache.pruneWindows(context.filesDir) } }
     }
 
@@ -470,7 +563,7 @@ fun EditorScreen(
         previewPlayer.failed.collect { error ->
             previewPlaying = false
             buffering = false
-            notice = context.getString(R.string.editor_preview_failed) +
+            notice = resources.getString(R.string.editor_preview_failed) +
                 "：" + previewPlayer.describe(error)
         }
     }
@@ -497,8 +590,18 @@ fun EditorScreen(
      * playhead instead of at the beginning of the track and then jumping.
      */
     fun togglePlay() {
+        // Playback owns the playhead from this moment. A fling still coasting
+        // from the last drag would keep writing the same value from its own
+        // coroutine, and two owners of one state is the bug this whole screen
+        // was rebuilt to remove (m03765).
+        flingJob?.cancel()
+        flingJob = null
         if (previewPlaying) {
             previewPlayer.pause()
+            // The follow loop glides a few tens of milliseconds behind the audio
+            // while it plays; on pause that lag has to close immediately or the
+            // line keeps sliding for a moment after the sound stopped.
+            playheadMs = previewPlayer.positionMs.coerceIn(0L, totalMs)
             previewPlaying = false
             return
         }
@@ -523,7 +626,7 @@ fun EditorScreen(
         previewPlaying = started
         if (!started) {
             buffering = false
-            notice = context.getString(R.string.editor_preview_failed) +
+            notice = resources.getString(R.string.editor_preview_failed) +
                 (previewPlayer.lastError?.let { error -> "：$error" } ?: "")
         }
     }
@@ -556,50 +659,51 @@ fun EditorScreen(
      * zero is a position like any other — reading it would drag the playhead to
      * the start and turn "play from here" into "play from the beginning".
      */
+    /**
+     * Follows playback with the frame clock and nothing else.
+     *
+     * The player is never asked where it is while playing. An audio sink
+     * reports its position in coarse steps — tens of milliseconds — and every
+     * attempt to smooth, extrapolate, clamp or servo those steps reintroduced
+     * them as a visible jump. Five rounds of tuning the old loop did not fix
+     * it; the loop itself was wrong. [PlayheadClock] is uniform by
+     * construction and unit-tested at every phone refresh rate.
+     *
+     * The player is consulted only at real discontinuities — press play, seek,
+     * pause — where [alignTo] is called explicitly rather than polled.
+     */
     LaunchedEffect(previewPlaying, totalMs, startedAtMs) {
         if (!previewPlaying) return@LaunchedEffect
-        var armed = false
-        // The player reports where it is every few dozen milliseconds, not on
-        // every frame; drawing the waveform from the last report alone makes it
-        // advance in steps (「波形移动的帧率太低，看起来卡卡的」, 2026-10-23).
-        // So the frame clock fills the gaps: the last report, plus the time
-        // that has passed since it arrived — and it stops filling when the
-        // reports stop, so a stalled player cannot walk the playhead away.
-        var reportedMs = -1L
-        var reportedAtMs = 0L
+        val clock = PlayheadClock(startMs = startedAtMs, totalMs = totalMs)
+        var waitingToStart = true
         while (previewPlaying) {
             withFrameMillis { frameMs ->
                 buffering = previewPlayer.isBuffering
-                if (buffering || dragging) return@withFrameMillis
-                val raw = previewPlayer.positionMs
-                if (raw < 0L || totalMs <= 0L) return@withFrameMillis
-                if (!armed) {
-                    if (raw < startedAtMs - START_TOLERANCE_MS) return@withFrameMillis
-                    armed = true
+                if (buffering || dragging) {
+                    // A drag or a buffer is a pause in real-time motion: reset
+                    // the clock to the audio and re-anchor when it resumes.
+                    clock.alignTo(previewPlayer.positionMs.coerceIn(0L, totalMs))
+                    return@withFrameMillis
                 }
-                if (raw != reportedMs) {
-                    reportedMs = raw
-                    reportedAtMs = frameMs
+                // Wait until the player has actually arrived at the seek, but
+                // only once — after that, no poll of its position at all.
+                if (waitingToStart) {
+                    if (previewPlayer.positionMs < startedAtMs - START_TOLERANCE_MS) {
+                        return@withFrameMillis
+                    }
+                    waitingToStart = false
+                    clock.advance(frameMs) // the anchor frame
+                    return@withFrameMillis
                 }
-                val elapsed = (frameMs - reportedAtMs).coerceIn(0L, MAX_EXTRAPOLATION_MS)
-                if (raw >= totalMs - END_TOLERANCE_MS) {
+                val running = clock.advance(frameMs)
+                playheadMs = clock.valueMs
+                if (!running) {
                     previewPlayer.pause()
                     previewPlaying = false
-                    playheadMs = totalMs
-                } else {
-                    // That is the whole follow rule: the moment moves, the
-                    // window follows it. The line stands in the middle of the
-                    // screen because the window is *derived* from the playhead,
-                    // so there is nothing here that could also move it — every
-                    // version that kept a window of its own ended up with the
-                    // line drifting (v0.3.6) or snapping (2026-10-23
-                    // 「红色光标固定在屏幕中间，不要动」).
-                    playheadMs = (reportedMs + elapsed).coerceAtMost(totalMs)
                 }
             }
         }
     }
-
     /**
      * Reports the failure the player cannot report itself: loaded, no error, no
      * sound.
@@ -620,7 +724,7 @@ fun EditorScreen(
                 previewPlayer.stop()
                 previewPlaying = false
                 buffering = false
-                notice = context.getString(
+                notice = resources.getString(
                     R.string.editor_preview_stalled,
                     state,
                     PREVIEW_STALL_MS / 1000L,
@@ -728,7 +832,7 @@ fun EditorScreen(
     fun addCut() {
         val updated = EditTrack.cutAt(clips, playheadMs)
         if (updated.size == clips.size) {
-            notice = context.getString(R.string.editor_cut_needs_room)
+            notice = resources.getString(R.string.editor_cut_needs_room)
             return
         }
         pickedCutMs = null
@@ -749,15 +853,23 @@ fun EditorScreen(
      */
     fun startExport(destination: File?) {
         if (exporting || clips.isEmpty() || totalMs <= 0L) return
+        val mainHandler = Handler(Looper.getMainLooper())
         exporting = true
         exportProgress = 0L
         val requestedPlan = plan
+        val requestedClips = clips
         scope.launch {
             val result = try {
                 exporter.export(
                     plan = requestedPlan,
                     destination = destination,
-                    onProgress = { percent -> exportProgress = percent.toLong() },
+                    // Called on the exporter's own looper. Writing Compose state
+                    // from there mutates the snapshot from a thread it does not
+                    // own, and the bar then never repainted. Posted to the main
+                    // looper instead.
+                    onProgress = { percent ->
+                        mainHandler.post { exportProgress = percent.toLong() }
+                    },
                 )
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -770,15 +882,73 @@ fun EditorScreen(
             exporting = false
             when (result) {
                 is EditExportResult.Success -> {
+                    // The badge in the library is driven by this sidecar, and the
+                    // screen used to rely on `onExported`, which the host does not
+                    // pass: every export therefore looked original. The marker is
+                    // written here so it happens whether or not a host listens.
+                    runCatching { DerivedMarker(context).markDerived(result.file.name) }
+                    // A derived recording is a NEW file, so its cache name is new
+                    // too — opening it used to start a full decode from the audio,
+                    // even though the very waveform the user just edited is already
+                    // in memory. Aggregate the already-decoded source waveforms into
+                    // the derived file's cache: no codec, no re-read of the audio,
+                    // and the edited recording opens instantly like the original.
+                    val derivedPlan = requestedPlan
+                    val derivedClips = requestedClips
+                    scope.launch {
+                        withContext(Dispatchers.IO) {
+                            runCatching {
+                                val track = TrackPeaks.build(
+                                    clips = derivedClips,
+                                    peaksOf = { file ->
+                                        waveforms[file.path]?.peaks
+                                            ?: PeaksCache.read(
+                                                PeaksCache.fileFor(file, context.filesDir),
+                                                file,
+                                            )?.data
+                                    },
+                                )
+                                if (track != null) {
+                                    PeaksCache.write(
+                                        PeaksCache.fileFor(result.file, context.filesDir),
+                                        track,
+                                        result.file,
+                                    )
+                                }
+                            }
+                        }
+                    }
                     Toast.makeText(
                         context,
-                        context.getString(R.string.editor_exported, result.file.name),
+                        resources.getString(R.string.editor_exported, result.file.name),
                         Toast.LENGTH_LONG,
                     ).show()
                     onExported(result.file)
                 }
 
-                is EditExportResult.Failure -> notice = result.message
+                is EditExportResult.Failure -> {
+                    // The reason is a value, so this screen picks the language:
+                    // the exporter lives in a module that has no resources. The
+                    // raw detail is appended only when it says something the
+                    // phrase does not.
+                    notice = resources.getString(
+                        when (result.reason) {
+                            EditExportResult.Failure.Reason.NothingToExport ->
+                                R.string.editor_export_nothing_to_export
+
+                            EditExportResult.Failure.Reason.SourceMissing ->
+                                R.string.editor_export_source_missing
+
+                            EditExportResult.Failure.Reason.RenameFailed ->
+                                R.string.editor_export_rename_failed
+
+                            EditExportResult.Failure.Reason.TransformFailed,
+                            EditExportResult.Failure.Reason.Unknown,
+                            -> R.string.editor_export_failed
+                        },
+                        result.message,
+                    )
+                }
             }
         }
     }
@@ -886,6 +1056,7 @@ fun EditorScreen(
                 if (peaks == null) {
                     WaveformPlaceholder(
                         loading = waveforms.values.any { it.loading },
+                        progress = decodeProgress.values.firstOrNull() ?: 0,
                         error = waveforms.values.firstOrNull { it.error != null }?.error,
                     )
                 } else {
@@ -994,7 +1165,7 @@ fun EditorScreen(
                             pickedCutMs = null
                             if (at != null) {
                                 afterEdit(EditTrack.removeCutAt(clips, at))
-                                notice = context.getString(R.string.editor_marker_deleted)
+                                notice = resources.getString(R.string.editor_marker_deleted)
                             }
                         },
                     ) {
@@ -1031,7 +1202,11 @@ fun EditorScreen(
                 TextButton(
                     onClick = {
                         insertCandidates = null
-                        scope.launch { insertCandidates = loadLibrary() }
+                        scope.launch {
+                            insertCandidates = withContext(Dispatchers.IO) {
+                                runCatching { loadLibrary() }.getOrDefault(emptyList())
+                            }
+                        }
                     },
                 ) {
                     Text(stringResource(R.string.editor_insert_audio))
@@ -1090,11 +1265,16 @@ fun EditorScreen(
                 Column {
                     Text(stringResource(R.string.editor_export_body_new))
                     Spacer(Modifier.height(12.dp))
-                    clips.firstOrNull()?.let { first ->
+                    // Overwriting is only offered when there is exactly one
+                    // recording behind the track. With several, "the original"
+                    // is ambiguous: picking one of them silently replaced a
+                    // source of its own merge.
+                    val single = clips.map { it.file }.distinct().singleOrNull()
+                    if (single != null) {
                         Text(
                             stringResource(
                                 R.string.editor_export_body_overwrite,
-                                waveforms[first.file.path]?.displayName ?: first.file.name,
+                                waveforms[single.path]?.displayName ?: single.name,
                             ),
                         )
                     }
@@ -1107,14 +1287,17 @@ fun EditorScreen(
                 }) { Text(stringResource(R.string.editor_export_save_as)) }
             },
             dismissButton = {
+                val single = clips.map { it.file }.distinct().singleOrNull()
                 TextButton(
                     onClick = {
                         showExportDialog = false
-                        val first = clips.firstOrNull() ?: return@TextButton
+                        if (single == null) return@TextButton
                         pendingEdit = PendingEdit.Overwrite(
-                            waveforms[first.file.path]?.displayName ?: first.file.name,
+                            waveforms[single.path]?.displayName ?: single.name,
+                            single,
                         )
                     },
+                    enabled = single != null,
                 ) { Text(stringResource(R.string.editor_export_overwrite)) }
             },
         )
@@ -1123,7 +1306,7 @@ fun EditorScreen(
     pendingEdit?.let { edit ->
         val (title, body) = when (edit) {
             is PendingEdit.DeleteSegment -> R.string.editor_delete_confirm_title to
-                context.getString(
+                resources.getString(
                     R.string.editor_delete_confirm_body,
                     formatDuration(edit.segment.startMs),
                     formatDuration(edit.segment.endMs),
@@ -1131,7 +1314,7 @@ fun EditorScreen(
                 )
 
             is PendingEdit.KeepOnly -> R.string.editor_keep_only_confirm_title to
-                context.getString(
+                resources.getString(
                     R.string.editor_keep_only_confirm_body,
                     formatDuration(edit.segment.startMs),
                     formatDuration(edit.segment.endMs),
@@ -1139,7 +1322,7 @@ fun EditorScreen(
                 )
 
             is PendingEdit.Repeat -> R.string.editor_repeat_confirm_title to
-                context.getString(
+                resources.getString(
                     R.string.editor_repeat_confirm_body,
                     formatDuration(edit.segment.startMs),
                     formatDuration(edit.segment.endMs),
@@ -1147,7 +1330,7 @@ fun EditorScreen(
                 )
 
             is PendingEdit.Overwrite -> R.string.editor_overwrite_confirm_title to
-                context.getString(R.string.editor_overwrite_confirm_body, edit.name)
+                resources.getString(R.string.editor_overwrite_confirm_body, edit.name)
         }
         AlertDialog(
             onDismissRequest = { pendingEdit = null },
@@ -1171,7 +1354,7 @@ fun EditorScreen(
                                     confirmed.segment.endMs,
                                 ),
                             )
-                            notice = context.getString(R.string.editor_segment_deleted)
+                            notice = resources.getString(R.string.editor_segment_deleted)
                         }
 
                         is PendingEdit.KeepOnly -> {
@@ -1182,7 +1365,7 @@ fun EditorScreen(
                                     confirmed.segment.endMs,
                                 ),
                             )
-                            notice = context.getString(R.string.editor_segment_kept)
+                            notice = resources.getString(R.string.editor_segment_kept)
                         }
 
                         is PendingEdit.Repeat -> {
@@ -1195,7 +1378,7 @@ fun EditorScreen(
                             )
                         }
 
-                        is PendingEdit.Overwrite -> startExport(clips.first().file)
+                        is PendingEdit.Overwrite -> startExport(confirmed.file)
                     }
                 }) {
                     Text(
@@ -1215,9 +1398,23 @@ fun EditorScreen(
 
     insertCandidates?.let { candidates ->
         val reference = clips.firstOrNull()?.file
-        val referenceFormat = remember(reference) {
-            reference?.let { AudioFormatProbe.probe(it) }
+        // Probing reads the container through MediaExtractor: that is disk I/O and
+        // must not run inside composition, where it would block every frame the
+        // dialog is open. The map is filled off the main thread for the whole
+        // candidate list at once, and composition only reads it.
+        val formats = remember(reference, candidates) {
+            androidx.compose.runtime.mutableStateMapOf<String, AudioFormatSpec>()
         }
+        LaunchedEffect(reference, candidates) {
+            val files = withContext(Dispatchers.IO) {
+                (listOfNotNull(reference) + candidates.map { it.file })
+                    .distinct()
+                    .mapNotNull { file -> AudioFormatProbe.probe(file)?.let { file.path to it } }
+            }
+            formats.clear()
+            formats.putAll(files)
+        }
+        val referenceFormat = reference?.let { formats[it.path] }
         AlertDialog(
             onDismissRequest = { insertCandidates = null },
             title = { Text(stringResource(R.string.editor_insert_audio)) },
@@ -1227,17 +1424,24 @@ fun EditorScreen(
                 } else {
                     Column(Modifier.verticalScroll(rememberScrollState())) {
                         candidates.forEach { candidate ->
-                            val format = AudioFormatProbe.probe(candidate.file)
+                            val format = formats[candidate.file.path]
+                            val problem = if (referenceFormat != null && format != null) {
+                                EditFormats.mismatch(referenceFormat, format)
+                            } else {
+                                null
+                            }
                             val compatible = referenceFormat != null &&
-                                format != null && sameFormat(referenceFormat, format)
+                                format != null && problem == null
+                            val mismatchNotice = resources.getString(
+                                R.string.editor_format_mismatch,
+                                candidate.displayName,
+                                describeMismatch(problem),
+                            )
                             TextButton(
                                 onClick = {
                                     insertCandidates = null
                                     if (!compatible) {
-                                        mismatch = context.getString(
-                                            R.string.editor_format_mismatch,
-                                            candidate.displayName,
-                                        )
+                                        notice = mismatchNotice
                                         return@TextButton
                                     }
                                     scope.launch { ensureWaveform(candidate) }
@@ -1294,7 +1498,11 @@ fun EditorScreen(
                         TextButton(
                             onClick = {
                                 showOrder = false
-                                scope.launch { insertCandidates = loadLibrary() }
+                                scope.launch {
+                            insertCandidates = withContext(Dispatchers.IO) {
+                                runCatching { loadLibrary() }.getOrDefault(emptyList())
+                            }
+                        }
                             },
                         ) {
                             Text(stringResource(R.string.editor_insert_audio))
@@ -1314,7 +1522,7 @@ fun EditorScreen(
                                     if (repeated) {
                                         append("  ")
                                         append(
-                                            context.getString(
+                                            resources.getString(
                                                 R.string.editor_order_source_from,
                                                 formatDuration(run.sourceStartMs),
                                             ),
@@ -1398,23 +1606,48 @@ private fun sourceRanges(
     }
     return ranges
 }
+/**
+ * The concrete property that makes a merge impossible, in the user's language.
+ *
+ * The rule itself lives in `EditFormats` (pure, unit-tested, Android-free); this
+ * only turns its answer into text, because a core module has no resources.
+ */
+@Composable
+private fun describeMismatch(problem: EditFormats.Mismatch?): String = when (problem) {
+    is EditFormats.Mismatch.Codec -> stringResource(
+        R.string.editor_mismatch_codec,
+        problem.base,
+        problem.other,
+    )
 
-/** Whether two recordings can be spliced into one file. */
-private fun sameFormat(left: AudioFormatSpec, right: AudioFormatSpec): Boolean =
-    left.mimeType == right.mimeType &&
-        left.sampleRate == right.sampleRate &&
-        left.channelCount == right.channelCount
+    is EditFormats.Mismatch.SampleRate -> stringResource(
+        R.string.editor_mismatch_sample_rate,
+        problem.base,
+        problem.other,
+    )
+
+    is EditFormats.Mismatch.Channels -> stringResource(
+        R.string.editor_mismatch_channels,
+        problem.base,
+        problem.other,
+    )
+
+    null -> ""
+}
 
 /** What the waveform area shows while there is nothing to draw yet. */
 @Composable
-private fun WaveformPlaceholder(loading: Boolean, error: String?) {
+private fun WaveformPlaceholder(loading: Boolean, progress: Int, error: String?) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         when {
             error != null -> Text(error)
             loading -> {
-                CircularProgressIndicator(modifier = Modifier.size(32.dp))
+                CircularProgressIndicator(
+                    progress = { progress / 100f },
+                    modifier = Modifier.size(32.dp),
+                )
                 Spacer(Modifier.height(8.dp))
-                Text(stringResource(R.string.editor_waveform_loading, 0))
+                Text(stringResource(R.string.editor_waveform_loading, progress))
             }
 
             else -> Text(stringResource(R.string.editor_waveform_failed))
@@ -1448,16 +1681,6 @@ private const val START_TOLERANCE_MS = 250L
  * happened" the user had to report from memory.
  */
 private const val PREVIEW_STALL_MS = 8_000L
-
-/**
- * How far the playhead may run past the player's last report, in ms.
- *
- * Between two reports of the player's position the frame clock carries the
- * playhead forward so the waveform slides instead of stepping. The carry is
- * capped: if the reports stop — a stall, a seek, a buffering player — the
- * playhead must stop with them rather than walking to the end of the file.
- */
-private const val MAX_EXTRAPOLATION_MS = 120L
 
 /**
  * The height of the waveform band.

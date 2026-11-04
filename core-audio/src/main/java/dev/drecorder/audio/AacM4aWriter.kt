@@ -19,6 +19,16 @@ class AacM4aWriter(
 
     private companion object {
         const val TIMEOUT_US = 10_000L
+        /**
+         * How many rounds the final flush gets.
+         *
+         * Each round waits [TIMEOUT_US], so this is up to four seconds of a stuck
+         * encoder before the tail is given up on. It is deliberately generous:
+         * cutting the flush short would end the file before the end of the audio
+         * it was fed, which is exactly the silent truncation this writer exists
+         * to avoid. Callers therefore close the writer off the main thread
+         * (CaptureService stops the session on Dispatchers.IO).
+         */
         const val MAX_DRAIN_ROUNDS = 400
 
         /**
@@ -31,8 +41,8 @@ class AacM4aWriter(
         const val MAX_INPUT_STALLS = 2_000
     }
 
-    private val codec: MediaCodec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
-    private val muxer: MediaMuxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+    private val codec: MediaCodec
+    private val muxer: MediaMuxer
     private val bufferInfo = MediaCodec.BufferInfo()
 
     private val bytesPerSecond = sampleRate * channelCount * 2
@@ -42,6 +52,18 @@ class AacM4aWriter(
     private var closed = false
 
     init {
+        // The encoder and the muxer are opened as a pair, and a failure in either
+        // one releases the other. Built as two property initialisers, a muxer that
+        // could not be created left a started hardware encoder behind — which every
+        // later session sees as "another app is recording" — and a configure failure
+        // left both open plus an .m4a with no moov atom on disk.
+        val openedCodec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
+        val openedMuxer = try {
+            MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        } catch (failure: Throwable) {
+            runCatching { openedCodec.release() }
+            throw failure
+        }
         val format = MediaFormat.createAudioFormat(
             MediaFormat.MIMETYPE_AUDIO_AAC,
             sampleRate,
@@ -51,8 +73,17 @@ class AacM4aWriter(
             setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
             setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16 * 1024)
         }
-        codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        codec.start()
+        try {
+            openedCodec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            openedCodec.start()
+        } catch (failure: Throwable) {
+            runCatching { openedCodec.release() }
+            runCatching { openedMuxer.release() }
+            runCatching { outputFile.delete() }
+            throw failure
+        }
+        codec = openedCodec
+        muxer = openedMuxer
     }
 
     /** Feeds [size] bytes of interleaved PCM16 from [pcm]. */
@@ -118,12 +149,19 @@ class AacM4aWriter(
         }
         drainUntilEndOfStream()
 
-        runCatching { codec.stop() }
-        codec.release()
-        if (muxerStarted) {
-            runCatching { muxer.stop() }
+        // try/finally: this is the only place the hardware encoder and the muxer
+        // are released, and a throw from the drain or from writeSampleData would
+        // otherwise leak the encoder for the life of the process and leave the
+        // .m4a without its index.
+        try {
+            runCatching { codec.stop() }
+            codec.release()
+        } finally {
+            if (muxerStarted) {
+                runCatching { muxer.stop() }
+            }
+            runCatching { muxer.release() }
         }
-        muxer.release()
 
         return pcmBytesWritten * 1_000L / bytesPerSecond
     }

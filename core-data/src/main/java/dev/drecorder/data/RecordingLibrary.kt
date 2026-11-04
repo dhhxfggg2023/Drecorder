@@ -106,7 +106,15 @@ class RecordingLibrary(
     private val derivedMarker: DerivedMarker? = null,
 ) {
 
-    fun recordings(): List<Recording> {
+    /**
+     * Lists finished recordings.
+     *
+     * [activeName] is the file a capture session is writing right now. The engine
+     * opens its file under the final name, so without this the file being
+     * recorded looks like a finished recording — and deleting it would unlink the
+     * file out from under the writer while it still reports success.
+     */
+    fun recordings(activeName: String? = null): List<Recording> {
         val directory = directoryProvider() ?: return emptyList()
         if (!directory.isDirectory) return emptyList()
 
@@ -116,7 +124,10 @@ class RecordingLibrary(
         // therefore be listed as a recording — a broken one, playable until it
         // ends in the middle. In-flight exports are not recordings.
         val files = directory.listFiles { file ->
-            file.isFile && file.name.isRecordingExtension() && !file.name.isInProgressExport()
+            file.isFile &&
+                file.name.isRecordingExtension() &&
+                !file.name.isInProgressExport() &&
+                file.name != activeName
         } ?: return emptyList()
 
         return files.map { file ->
@@ -132,23 +143,38 @@ class RecordingLibrary(
     }
 
     fun delete(recording: Recording): Boolean {
+        // The sidecars describe this file. Clearing them first meant a delete that
+        // failed left the recording in place with its "silent" and "edited"
+        // badges gone, which is worse than either outcome.
+        val deleted = runCatching { recording.file.delete() }.getOrDefault(false)
+        if (!deleted) return false
         marker.clear(recording.displayName)
         derivedMarker?.clear(recording.displayName)
-        return runCatching { recording.file.delete() }.getOrDefault(false)
+        return true
     }
 
     fun rename(recording: Recording, newDisplayName: String): Boolean {
-        val target = File(recording.file.parentFile, newDisplayName)
+        // The library only lists files that carry a recording extension, so a name
+        // typed without one ("会议记录") would rename the recording out of the app's
+        // sight: it would vanish from the list while still occupying the folder.
+        // The original extension is kept unless the new name already has one.
+        val extension = recording.file.name.substringAfterLast('.', "")
+        if (extension.isEmpty() || extension.length == recording.file.name.length) return false
+        val typed = newDisplayName.trim()
+        if (typed.isEmpty() || typed.contains('/') || typed.contains('\\')) return false
+        val newName = if (typed.isRecordingExtension()) typed else "${typed.trimEnd('.')}.$extension"
+
+        val target = File(recording.file.parentFile, newName)
         if (target.exists()) return false
         val renamed = runCatching { recording.file.renameTo(target) }.getOrDefault(false)
         if (renamed) {
             if (recording.wasSilent) {
                 marker.clear(recording.displayName)
-                marker.write(newDisplayName, wasSilent = true)
+                marker.write(newName, wasSilent = true)
             }
             if (recording.wasEdited) {
                 derivedMarker?.clear(recording.displayName)
-                derivedMarker?.markDerived(newDisplayName)
+                derivedMarker?.markDerived(newName)
             }
         }
         return renamed

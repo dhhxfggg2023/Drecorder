@@ -107,12 +107,27 @@ private val FallbackLight = lightColorScheme(
     onPrimary = androidx.compose.ui.graphics.Color(0xFFFFFFFF),
     primaryContainer = androidx.compose.ui.graphics.Color(0xFF9CF1F6),
     onPrimaryContainer = androidx.compose.ui.graphics.Color(0xFF002022),
+    secondary = androidx.compose.ui.graphics.Color(0xFF4A6365),
+    onSecondary = androidx.compose.ui.graphics.Color(0xFFFFFFFF),
     secondaryContainer = androidx.compose.ui.graphics.Color(0xFFD4E8E9),
     onSecondaryContainer = androidx.compose.ui.graphics.Color(0xFF0E1F20),
+    // A ladder, not a single flat plane: the list rows, the raised controls and
+    // the page itself have to be told apart without drawing borders around
+    // everything. Material 3 gives the five levels and the rows are placed on
+    // them; leaving them unset collapses the whole app onto one white.
     surface = androidx.compose.ui.graphics.Color(0xFFF7FAFA),
+    surfaceContainerLowest = androidx.compose.ui.graphics.Color(0xFFFFFFFF),
+    surfaceContainerLow = androidx.compose.ui.graphics.Color(0xFFF0F5F5),
+    surfaceContainer = androidx.compose.ui.graphics.Color(0xFFEBF1F1),
+    surfaceContainerHigh = androidx.compose.ui.graphics.Color(0xFFE5ECEC),
+    surfaceContainerHighest = androidx.compose.ui.graphics.Color(0xFFDFE7E7),
     surfaceVariant = androidx.compose.ui.graphics.Color(0xFFE3EAEA),
     onSurfaceVariant = androidx.compose.ui.graphics.Color(0xFF3F4949),
+    outline = androidx.compose.ui.graphics.Color(0xFF6F7979),
+    outlineVariant = androidx.compose.ui.graphics.Color(0xFFBEC9C9),
     error = androidx.compose.ui.graphics.Color(0xFFBA1A1A),
+    errorContainer = androidx.compose.ui.graphics.Color(0xFFFFDAD6),
+    onErrorContainer = androidx.compose.ui.graphics.Color(0xFF410002),
 )
 
 private val FallbackDark = darkColorScheme(
@@ -120,11 +135,23 @@ private val FallbackDark = darkColorScheme(
     onPrimary = androidx.compose.ui.graphics.Color(0xFF003739),
     primaryContainer = androidx.compose.ui.graphics.Color(0xFF004F53),
     onPrimaryContainer = androidx.compose.ui.graphics.Color(0xFF9CF1F6),
+    secondary = androidx.compose.ui.graphics.Color(0xFFB1CCCE),
+    onSecondary = androidx.compose.ui.graphics.Color(0xFF1B3436),
     secondaryContainer = androidx.compose.ui.graphics.Color(0xFF324B4D),
     onSecondaryContainer = androidx.compose.ui.graphics.Color(0xFFD4E8E9),
     surface = androidx.compose.ui.graphics.Color(0xFF0E1515),
+    surfaceContainerLowest = androidx.compose.ui.graphics.Color(0xFF090F0F),
+    surfaceContainerLow = androidx.compose.ui.graphics.Color(0xFF161D1D),
+    surfaceContainer = androidx.compose.ui.graphics.Color(0xFF1A2121),
+    surfaceContainerHigh = androidx.compose.ui.graphics.Color(0xFF242B2B),
+    surfaceContainerHighest = androidx.compose.ui.graphics.Color(0xFF2F3535),
     surfaceVariant = androidx.compose.ui.graphics.Color(0xFF3F4949),
     onSurfaceVariant = androidx.compose.ui.graphics.Color(0xFFBEC9C9),
+    outline = androidx.compose.ui.graphics.Color(0xFF899393),
+    outlineVariant = androidx.compose.ui.graphics.Color(0xFF3F4949),
+    error = androidx.compose.ui.graphics.Color(0xFFFFB4AB),
+    errorContainer = androidx.compose.ui.graphics.Color(0xFF93000A),
+    onErrorContainer = androidx.compose.ui.graphics.Color(0xFFFFDAD6),
 )
 
 @Composable

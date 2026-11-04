@@ -102,9 +102,8 @@ class UpdateChecker(context: Context) {
      */
     suspend fun verifyDownloadedApk(apk: File, manifest: UpdateManifest): VerificationResult =
         withContext(Dispatchers.IO) {
-            runCatching { apk.readBytes() }.fold(
-                onSuccess = { bytes ->
-                    val actual = sha256Hex(bytes)
+            runCatching { sha256Hex(apk) }.fold(
+                onSuccess = { actual ->
                     verifyDownload(
                         expectedSha256 = manifest.sha256,
                         actualSha256 = actual,

@@ -126,6 +126,16 @@ class CaptureOverlay(
 
         // Drag anywhere on the chip; the stop button keeps its own click because a
         // clickable child consumes the touch before this listener sees it.
+        //
+        // The window is added with FLAG_LAYOUT_NO_LIMITS, so without this clamp the
+        // chip could be dragged fully off the screen and the stop button was gone
+        // for good — the session could then only be stopped from the notification.
+        val screen = row.resources.displayMetrics
+        fun clampedToScreen(x: Int, y: Int): Pair<Int, Int> {
+            val maxX = (screen.widthPixels - row.width).coerceAtLeast(0)
+            val maxY = (screen.heightPixels - row.height).coerceAtLeast(0)
+            return x.coerceIn(0, maxX) to y.coerceIn(0, maxY)
+        }
         val touchSlop = dp(4).toFloat()
         var downX = 0f
         var downY = 0f
@@ -153,17 +163,24 @@ class CaptureOverlay(
                         dragging = true
                     }
                     if (dragging) {
-                        layoutParams.x = startX + dx.toInt()
-                        layoutParams.y = startY + dy.toInt()
+                        val (nextX, nextY) = clampedToScreen(startX + dx.toInt(), startY + dy.toInt())
+                        layoutParams.x = nextX
+                        layoutParams.y = nextY
                         runCatching { manager.updateViewLayout(row, layoutParams) }
                     }
                     true
                 }
 
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    // Saved clamped as well: a remembered position outside the screen
+                    // would put the chip out of reach the next time it is shown.
+                    val (finalX, finalY) = clampedToScreen(layoutParams.x, layoutParams.y)
+                    layoutParams.x = finalX
+                    layoutParams.y = finalY
+                    runCatching { manager.updateViewLayout(row, layoutParams) }
                     prefs.edit()
-                        .putInt(KEY_X, layoutParams.x)
-                        .putInt(KEY_Y, layoutParams.y)
+                        .putInt(KEY_X, finalX)
+                        .putInt(KEY_Y, finalY)
                         .apply()
                     if (!dragging && event.actionMasked == MotionEvent.ACTION_UP) {
                         if (downOnStop) onStop() else onOpen()

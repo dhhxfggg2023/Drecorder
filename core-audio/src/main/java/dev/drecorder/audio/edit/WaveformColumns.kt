@@ -38,6 +38,16 @@ object WaveformBins {
     const val MAX_COLUMNS = 4_096
 
     /**
+     * How narrow a drawn column may be, in pixels.
+     *
+     * Six pixels keeps a thousand-column screen from being re-derived while it
+     * scrolls, and it keeps the column count low enough that the whole-screen
+     * overview (10 ms buckets) is finer than every reachable zoom needs — which
+     * is what lets the per-window decode path stay idle.
+     */
+    const val MIN_COLUMN_PX = 6
+
+    /**
      * Bins [bars] bars of [barMs] each, starting at [firstBarStartMs].
      *
      * The bars are anchored to the **recording's** time grid, not to the
@@ -94,9 +104,13 @@ object WaveformBins {
      * from saturating. Zoomed in the opposite happens, and drawing one column
      * per pixel is what turns every bucket into a flat block 5 pixels wide:
      * 「放大后看到一个个矩形」 (2026-10-23). So a column is never shorter than a
-     * bucket: at 2 s across a phone the columns fall back to the bucket grid and
-     * each one is drawn as its own point, which is what makes the peaks sharp
-     * instead of square.
+     * bucket — and never shorter than [MIN_COLUMN_PX] pixels either. One-pixel
+     * columns made the screen a thousand columns wide, each one re-derived as
+     * the window slid, which is a lot of arithmetic for a picture the eye reads
+     * as a shape; six-pixel columns carry the same outline (the drawing joins
+     * neighbouring columns into one path) at a fraction of the work, and they
+     * keep the whole-recording overview fine enough that the detail decode path
+     * never has to run at all.
      *
      * The answer only changes when the span or the width changes, never when the
      * window scrolls, so the grid stays still while the picture moves.
@@ -104,8 +118,9 @@ object WaveformBins {
     fun stepMs(peaks: PeakData, spanMs: Long, widthPx: Int): Long {
         val bucket = bucketMs(peaks)
         if (widthPx <= 0 || spanMs <= 0L) return bucket
-        val perPixelMs = (spanMs + widthPx - 1) / widthPx
-        val bucketsPerColumn = (perPixelMs + bucket - 1) / bucket
+        val columns = (widthPx + MIN_COLUMN_PX - 1) / MIN_COLUMN_PX
+        val perColumnMs = (spanMs + columns - 1) / columns
+        val bucketsPerColumn = (perColumnMs + bucket - 1) / bucket
         return bucket * bucketsPerColumn.coerceAtLeast(1L)
     }
 

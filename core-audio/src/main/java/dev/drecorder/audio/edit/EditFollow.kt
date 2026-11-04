@@ -28,12 +28,19 @@ object EditFollow {
     const val ANCHOR_FRACTION = 0.5f
 
     /**
-     * The narrowest window the user can zoom into.
+     * The narrowest window the user can zoom into — the most a screen will ever
+     * be asked to hold.
      *
-     * Two seconds is about the length of a pause between two sentences, which
-     * is the finest distinction the cut points of a conversation need.
+     * This is a floor on *seconds per screen*, which is the same thing as a
+     * ceiling on how far the timeline can be stretched. Two seconds was fine
+     * for precision but it made every other weakness of the picture five times
+     * bigger: a millisecond became half a pixel, so the smallest quantisation in
+     * the data and the smallest hitch in playback both showed up as visible
+     * movement. Five seconds still resolves a pause between two sentences — the
+     * finest cut a conversation needs — while keeping enough audio on screen
+     * that the waveform reads as a shape rather than a sliver.
      */
-    const val MIN_SPAN_MS = 2_000L
+    const val MIN_SPAN_MS = 5_000L
 
     /**
      * The window that shows [playheadMs] under the line.

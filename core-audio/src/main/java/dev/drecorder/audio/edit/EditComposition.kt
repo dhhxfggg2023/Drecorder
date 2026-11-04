@@ -26,9 +26,17 @@ object EditComposition {
      * CPU on a long recording (DESIGN §12.1).
      */
     fun build(plan: EditPlan): Composition {
+        // A keep of zero length is not audio, and it is reachable: a recording
+        // whose duration the probe could not read enters the plan as 0..0, and
+        // media3 rejects a clip with no content (start == end == 0, duration 0).
+        // Dropping such ranges here keeps one such file from failing the whole
+        // export of a merged track.
         val items = plan.sources.flatMap { source ->
-            source.keep.map { range -> clip(source, range) }
+            source.keep
+                .filter { it.durationMs > 0L }
+                .map { range -> clip(source, range) }
         }
+        require(items.isNotEmpty()) { "no audio left to export" }
         val sequence = EditedMediaItemSequence.withAudioFrom(items)
         return Composition.Builder(sequence)
             .setTransmuxAudio(true)

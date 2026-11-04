@@ -5,4 +5,8 @@
     <files-path name="internal" path="." />
     <!-- Downloads land here before the update is verified and installed. -->
     <external-files-path name="updates" path="Download/" />
+    <!-- A recording the user picked a folder for lives outside every path above
+         (shared storage, another app's tree). Sharing copies just that one file
+         here instead of exporting all of shared storage through the provider. -->
+    <cache-path name="shared" path="sharing/" />
 </paths>

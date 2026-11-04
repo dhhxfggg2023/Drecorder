@@ -269,6 +269,17 @@ class PeakDecodeLoop(
         val bytes = ByteArray(end - info.offset)
         buffer.get(bytes)
 
+        // The buffer's presentation time is the only clock the waveform has:
+        // it is what the player also reads, and it is the same clock for every
+        // window decoded from the same file, which is what makes two adjacent
+        // window waveforms meet at their seam instead of each carrying its own
+        // idea of where the audio starts. Converted to frames once, with the
+        // intra-buffer offset added in frames too — a round trip through
+        // microseconds loses a frame each way, and that wobble read as a gap.
+        val bufferStartFrame =
+            (info.presentationTimeUs * sampleRate + 500_000L) / 1_000_000L
+        var framesDone = 0L
+
         var total = 0
         var index = 0
         while (index + 1 < bytes.size) {
@@ -278,12 +289,13 @@ class PeakDecodeLoop(
             total++
             index += 2
             if (total == pcm.size) {
-                bins.addPcm16(pcm, total)
+                bins.addPcm16AtFrame(bufferStartFrame + framesDone, pcm, total)
+                framesDone += total / channelCount
                 total = 0
             }
         }
         if (total > 0) {
-            bins.addPcm16(pcm, total)
+            bins.addPcm16AtFrame(bufferStartFrame + framesDone, pcm, total)
         }
     }
 
