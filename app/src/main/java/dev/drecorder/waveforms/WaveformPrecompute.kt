@@ -44,6 +44,7 @@ object WaveformPrecompute {
     private val mutex = Mutex()
     private var worker: Job? = null
     private var currentCancel: AtomicBoolean? = null
+    private var appContext: Context? = null
 
     /** True while a capture session runs; the decode yields so recording wins. */
     @Volatile
@@ -59,6 +60,11 @@ object WaveformPrecompute {
             currentCancel?.set(true)
             worker?.cancel()
             worker = null
+        } else {
+            // A recording finished: whatever was queued while it ran (or was
+            // put back after the interrupted decode) has to resume now, rather
+            // than waiting for the next cold start.
+            appContext?.let { startWorker(it) }
         }
     }
 
@@ -70,6 +76,7 @@ object WaveformPrecompute {
      */
     suspend fun enqueueMissing(context: Context) {
         val app = context.applicationContext
+        appContext = app
         val directory = withContext(Dispatchers.IO) {
             RecordSettings.outputDirectory(app)?.let(::File) ?: defaultOutputDirectory(app)
         } ?: return
@@ -91,6 +98,7 @@ object WaveformPrecompute {
     /** Queues one file immediately — used right after an import or an export. */
     suspend fun enqueue(context: Context, file: File) {
         val app = context.applicationContext
+        appContext = app
         mutex.withLock { pending.add(file) }
         startWorker(app)
     }
@@ -111,7 +119,12 @@ object WaveformPrecompute {
                         null
                     }
                 } ?: break
-                decodeOne(app, next)
+                // A file with a recording extension but unreadable audio
+                // must not end the loop: every other queued file still needs
+                // its cache. The failure is disposable — the editor falls
+                // back to progressive decoding for this one file.
+                runCatching { decodeOne(app, next) }
+                    .onFailure { currentCancel = null }
                 // Yield between files: a long queue must never own the CPU.
                 delay(150L)
             }

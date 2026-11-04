@@ -27,9 +27,12 @@ object AudioImport {
      * library. A second import of the same file keeps both.
      */
     fun destinationName(displayName: String, existing: Set<String>): String {
-        val stem = displayName.substringBeforeLast('.', displayName)
-        val extension = displayName.substringAfterLast('.', "m4a")
-        var candidate = displayName
+        // A display name is data, not a path. Strip separators so a provider
+        // that returns "Music/song.m4a" cannot create a subdirectory.
+        val safe = displayName.replace('/', '_').replace('\\', '_')
+        val stem = safe.substringBeforeLast('.', safe)
+        val extension = safe.substringAfterLast('.', "m4a")
+        var candidate = safe
         var attempt = 2
         while (candidate in existing) {
             candidate = "$stem-import-$attempt.$extension"

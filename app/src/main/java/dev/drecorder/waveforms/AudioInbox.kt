@@ -3,6 +3,7 @@ package dev.drecorder.waveforms
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.OpenableColumns
 import dev.drecorder.capture.RecordSettings
 import dev.drecorder.data.AudioImport
 import dev.drecorder.ui.library.defaultOutputDirectory
@@ -34,8 +35,25 @@ object AudioInbox {
      */
     suspend fun import(context: Context, uri: Uri, displayName: String?): Result {
         val app = context.applicationContext
-        val name = displayName ?: uri.lastPathSegment ?: return Result.Rejected("no name")
-        if (!AudioImport.accepts(name)) {
+        // A shared URI is almost always content://, whose last path segment is
+        // a numeric id or "audio/123" — not a file name. Ask the resolver for
+        // the real display name instead, and fall back to the MIME type when
+        // even that has no extension. Without this, sharing from WeChat, QQ or
+        // a file manager was rejected before a single byte was copied.
+        val resolvedName = withContext(Dispatchers.IO) {
+            displayName?.takeIf { it.isNotBlank() } ?: displayNameOf(app, uri)
+        } ?: return Result.Rejected("no name")
+        val name = if (AudioImport.accepts(resolvedName)) {
+            resolvedName
+        } else {
+            val extension = extensionFor(app.contentResolver.getType(uri))
+                ?: return Result.Rejected("unsupported format")
+            resolvedName.substringBeforeLast('.', resolvedName) + "." + extension
+        }
+        // A name is not a path: a display name that contains a separator would
+        // make File(directory, name) point into a directory that does not exist.
+        val safeName = name.replace('/', '_').replace('\\', '_')
+        if (!AudioImport.accepts(safeName)) {
             return Result.Rejected("unsupported format")
         }
         val directory = withContext(Dispatchers.IO) {
@@ -47,7 +65,7 @@ object AudioInbox {
                 app.contentResolver.openInputStream(uri)?.use { input ->
                     temporary.outputStream().use { output -> input.copyTo(output) }
                 } ?: return@withContext null
-                AudioImport.copyInto(temporary, directory, name)
+                AudioImport.copyInto(temporary, directory, safeName)
             } finally {
                 runCatching { temporary.delete() }
             }
@@ -56,6 +74,23 @@ object AudioInbox {
         // now, in the background, rather than making them wait for it.
         WaveformPrecompute.enqueue(app, staged)
         return Result.Imported(staged.name)
+    }
+
+    /** The real file name behind a content:// URI, if the provider gives one. */
+    private fun displayNameOf(app: Context, uri: Uri): String? = runCatching {
+        app.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
+        }
+    }.getOrNull()
+
+    /** A container extension for the formats the library reads. */
+    private fun extensionFor(mime: String?): String? = when {
+        mime == null -> null
+        mime.contains("mp4") || mime.contains("m4a") || mime.contains("aac") -> "m4a"
+        mime.contains("wav") || mime.contains("x-wav") -> "wav"
+        mime.contains("ogg") || mime.contains("vorbis") -> "ogg"
+        else -> null
     }
 
     /**
