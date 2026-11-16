@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -30,22 +29,14 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.LibraryMusic
 import androidx.compose.material.icons.outlined.Public
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.Surface
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -57,30 +48,43 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.drecorder.R
+import dev.drecorder.data.formatSize
+import dev.drecorder.ui.design.IconTile
+import dev.drecorder.ui.design.TextActionButton
+import dev.drecorder.ui.design.brandGradientBrush
+import dev.drecorder.ui.design.recordingGradientBrush
 import kotlinx.coroutines.delay
 import java.util.Locale
 
 /**
- * One screen for recording: range line, one big button, one way to the library.
+ * The recording deck: scope pill, one big gradient disc, one way to the library.
  *
- * The separate "recording in progress" screen is gone because it duplicated what this
- * screen already shows: while a session runs, the button turns into the stop control
- * and its label carries the elapsed time. Tapping the button stops; it never navigates.
+ * Restyled (2026-11): a gradient primary surface instead of a
+ * flat disc, a floating card for the library, a caption under every icon and a
+ * much bolder title. The behaviour is unchanged — while a session runs the disc
+ * turns cherry-red, the label carries the elapsed time, and tapping always
+ * stops instead of navigating.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     notice: String?,
@@ -106,12 +110,18 @@ fun HomeScreen(
      * The live input level, 0f..1f, while recording.
      *
      * A recorder that shows nothing moving is indistinguishable from one that
-     * has stopped working, and the engine has been meters-deep in this value
-     * all along — it never reached a pixel. The halo around the button breathes
-     * with it instead, which is the only place on this screen where motion says
-     * something true about the audio.
+     * has stopped working. The halo around the disc breathes with it instead,
+     * which is the only place on this screen where motion says something true
+     * about the audio.
      */
     level: Float = 0f,
+    /**
+     * Rough disk cost of the current settings for one minute of audio, in bytes.
+     *
+     * Shown under the start label so the quality choice can be judged before
+     * recording: "320 kbps" means nothing, "~2.3 MB per minute" does.
+     */
+    sizePerMinuteBytes: Long = 0L,
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
@@ -149,80 +159,70 @@ fun HomeScreen(
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.surface,
-        topBar = {
-            // No gear here any more: settings is a sibling page in the bar below,
-            // not a sub-screen buried behind this one.
-            TopAppBar(
-                title = { Text(stringResource(R.string.app_name)) },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
-            )
-        },
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = bottomBar,
     ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
-                .navigationBarsPadding(),
+                .padding(innerPadding),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(
-                text = stringResource(R.string.home_subtitle),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                modifier = Modifier.padding(horizontal = 32.dp),
-            )
+            // Header: the app name large, one honest line under it. No app bar,
+            // so the gradient disc below is the only thing that competes.
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 24.dp, end = 24.dp, top = 18.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.app_name),
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.home_subtitle),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            Spacer(Modifier.weight(1f))
 
             // The recording source is a setting, but it is also the first thing a
-            // user needs to see before pressing the button, so it is a chip that
-            // states the current scope and is itself the way to change it. A
-            // sentence plus a separate 「更改」 link made the same information take
-            // two controls and a whole row of its own.
-            AssistChip(
+            // user needs to see before pressing the button, so it is a pill that
+            // states the current scope and is itself the way to change it.
+            Surface(
                 onClick = onOpenSettings,
-                label = { Text(rangeLabel) },
-                leadingIcon = {
+                shape = RoundedCornerShape(percent = 50),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Icon(
                         imageVector = if (usesApps) Icons.Outlined.Apps else Icons.Outlined.Public,
                         contentDescription = null,
-                        modifier = Modifier.size(18.dp),
+                        modifier = Modifier.size(17.dp),
                     )
-                },
-            )
-
-            if (targetSilent && recording) {
-                Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    shape = MaterialTheme.shapes.small,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 24.dp, vertical = 4.dp),
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Warning,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onErrorContainer,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = stringResource(R.string.record_silent_warning),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                        )
-                    }
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = rangeLabel,
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
                 }
             }
 
-            Spacer(modifier = Modifier.weight(1f))
+            Spacer(Modifier.height(22.dp))
 
             DeckButton(
                 recording = recording,
@@ -230,7 +230,7 @@ fun HomeScreen(
                 onClick = { if (recording) onStopCapture() else onStartCapture() },
             )
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(Modifier.height(20.dp))
 
             // The one line that changes with the state of the recorder. Idle it
             // names the action; recording it is the clock, set in the same place
@@ -245,7 +245,7 @@ fun HomeScreen(
                 },
                 style = if (recording) {
                     // Monospaced digits: a proportional clock shifts its own
-                    // width every time a digit changes, and at 46sp that reads
+                    // width every time a digit changes, and at 40sp that reads
                     // as the whole line twitching once a second.
                     MaterialTheme.typography.displaySmall.copy(
                         fontFamily = FontFamily.Monospace,
@@ -261,66 +261,103 @@ fun HomeScreen(
                 },
             )
             if (recording) {
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(Modifier.height(4.dp))
                 Text(
                     text = stringResource(R.string.home_tap_to_stop),
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.error,
                 )
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            TextButton(onClick = { disclosureVisible = true }) {
-                Icon(
-                    imageVector = Icons.Filled.Info,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
+            } else if (sizePerMinuteBytes > 0L) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = stringResource(
+                        R.string.home_size_per_minute,
+                        formatSize(sizePerMinuteBytes),
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(stringResource(R.string.home_why_authorization))
             }
 
-            Spacer(modifier = Modifier.weight(1f))
+            if (targetSilent && recording) {
+                Spacer(Modifier.height(14.dp))
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Warning,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = stringResource(R.string.record_silent_warning),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                    }
+                }
+            }
 
-            // The library is the second thing anyone wants, so it gets a footer
-            // of a real height on a raised surface rather than an outlined pill
-            // floating above the navigation bar.
+            Spacer(Modifier.weight(1f))
+
+            // The library is the second thing anyone wants, so it gets a real
+            // card with a gradient icon tile rather than a thin outlined row.
             Surface(
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                onClick = onOpenLibrary,
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
                 shape = MaterialTheme.shapes.large,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 24.dp),
+                    .padding(horizontal = 20.dp),
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable(onClick = onOpenLibrary)
-                        .padding(horizontal = 20.dp, vertical = 18.dp),
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                Icon(
-                    imageVector = Icons.Outlined.LibraryMusic,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(22.dp),
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-                Text(
-                    text = stringResource(R.string.home_files, recordingCount),
-                    style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.weight(1f),
-                )
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                    IconTile(
+                        icon = Icons.Outlined.LibraryMusic,
+                        size = 44.dp,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                    Spacer(Modifier.width(14.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        // One line only: the card already says "recordings" in
+                        // the count, and a second label under it repeated the
+                        // same word on the screenshot (2026-11-16).
+                        Text(
+                            text = stringResource(R.string.home_files, recordingCount),
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(Modifier.height(6.dp))
+
+            TextActionButton(
+                text = stringResource(R.string.home_why_authorization),
+                icon = Icons.Filled.Info,
+                onClick = { disclosureVisible = true },
+            )
+
+            Spacer(Modifier.height(8.dp))
         }
     }
 
@@ -340,71 +377,65 @@ fun HomeScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { disclosureVisible = false }) {
-                    Text(stringResource(R.string.common_confirm))
-                }
+                TextActionButton(
+                    text = stringResource(R.string.common_confirm),
+                    onClick = { disclosureVisible = false },
+                )
             },
         )
     }
 }
 
 /**
- * The one button: idle, or recording. Colour and shape carry the state, and a tap
- * always does the obvious thing for that state.
+ * The one control: idle, or recording. Gradient and shape carry the state, and a
+ * tap always does the obvious thing for that state.
  *
  * It sits inside a halo that breathes on its own time. The screen is otherwise
- * almost empty — one button, one line of text — and a flat disc on a near-black
- * background reads as a placeholder; the slow pulse is what makes the button
+ * almost empty — one disc, one line of text — and a flat circle on a near-white
+ * background reads as a placeholder; the slow pulse is what makes the control
  * look alive and, while recording, look live. It is the only motion on the
  * screen, so it never competes with the elapsed time.
  */
 @Composable
 private fun DeckButton(recording: Boolean, level: Float, onClick: () -> Unit) {
-    val container = if (recording) {
-        MaterialTheme.colorScheme.error
-    } else {
-        MaterialTheme.colorScheme.primary
-    }
-    val content = if (recording) {
-        MaterialTheme.colorScheme.onError
-    } else {
-        MaterialTheme.colorScheme.onPrimary
-    }
-    // Idle: the halo breathes on its own, slowly, so the disc reads as alive.
-    // Recording: it follows the input level, so the pulse is the sound and a
-    // silent capture stops pulsing — which is exactly the question the user has
-    // in front of a recorder that may be capturing nothing.
+    val scheme = MaterialTheme.colorScheme
+    val startLabel = stringResource(R.string.home_start)
+    val stopLabel = stringResource(R.string.record_stop)
+    val brush = if (recording) recordingGradientBrush() else brandGradientBrush()
+    val glyphColor = if (recording) scheme.onError else scheme.onPrimary
+    val haloColor = if (recording) scheme.tertiary else scheme.primary
+
     val idleHalo by rememberInfiniteTransition(label = "halo").animateFloat(
         initialValue = 0.16f,
-        targetValue = 0.38f,
+        targetValue = 0.40f,
         animationSpec = infiniteRepeatable(
             animation = tween(durationMillis = 1_800, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse,
         ),
         label = "haloAlpha",
     )
-    val halo = if (recording) (0.10f + level * 0.45f).coerceIn(0.10f, 0.55f) else idleHalo
-    val ringColor = MaterialTheme.colorScheme.primary
-    val trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+    val halo = if (recording) (0.12f + level * 0.45f).coerceIn(0.12f, 0.58f) else idleHalo
+    val trackColor = scheme.outlineVariant.copy(alpha = 0.35f)
+
     Box(
         modifier = Modifier
-            .size(196.dp)
+            .size(210.dp)
             .drawBehind {
                 val radius = size.minDimension / 2f
                 drawCircle(
                     brush = Brush.radialGradient(
-                        colors = listOf(container.copy(alpha = halo), Color.Transparent),
+                        colors = listOf(haloColor.copy(alpha = halo), Color.Transparent),
                         center = center,
                         radius = radius,
                     ),
                     radius = radius,
                 )
-                // A level ring instead of a bar: it hugs the button that causes
+                // A level ring instead of a bar: it hugs the control that causes
                 // the sound, and it is read at a glance from across a room.
                 // Only while recording — idle, an empty ring is just decoration.
                 if (recording) {
-                    val stroke = 6.dp.toPx()
-                    val inset = stroke / 2f + 4.dp.toPx()
+                    val stroke = 7.dp.toPx()
+                    val inset = stroke / 2f + 5.dp.toPx()
                     val arcRadius = radius - inset
                     drawArc(
                         color = trackColor,
@@ -416,7 +447,7 @@ private fun DeckButton(recording: Boolean, level: Float, onClick: () -> Unit) {
                         style = Stroke(width = stroke, cap = StrokeCap.Round),
                     )
                     drawArc(
-                        color = ringColor,
+                        color = scheme.primary,
                         startAngle = -90f,
                         sweepAngle = 360f * level.coerceIn(0f, 1f),
                         useCenter = false,
@@ -430,25 +461,38 @@ private fun DeckButton(recording: Boolean, level: Float, onClick: () -> Unit) {
     ) {
         Box(
             modifier = Modifier
-                .size(112.dp)
+                .size(136.dp)
+                .shadow(
+                    elevation = 18.dp,
+                    shape = CircleShape,
+                    ambientColor = haloColor.copy(alpha = 0.35f),
+                    spotColor = haloColor.copy(alpha = 0.45f),
+                )
                 .clip(CircleShape)
-                .background(container)
-                .clickable(onClick = onClick),
+                .background(brush)
+                .clickable(onClick = onClick)
+                // The disc is the only control on the screen and it has no text
+                // inside it, so the label has to come from semantics or a
+                // screen-reader user gets an unlabelled button.
+                .semantics {
+                    role = Role.Button
+                    contentDescription = if (recording) stopLabel else startLabel
+                },
             contentAlignment = Alignment.Center,
         ) {
             if (recording) {
                 Box(
                     modifier = Modifier
-                        .size(28.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(content),
+                        .size(34.dp)
+                        .clip(RoundedCornerShape(9.dp))
+                        .background(glyphColor),
                 )
             } else {
                 Box(
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(46.dp)
                         .clip(CircleShape)
-                        .background(content),
+                        .background(glyphColor),
                 )
             }
         }

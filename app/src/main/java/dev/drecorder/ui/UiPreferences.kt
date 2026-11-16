@@ -23,6 +23,7 @@ object UiPreferences {
     private const val PREFS = "ui"
     private const val KEY_LANGUAGE = "language"
     private const val KEY_THEME = "theme"
+    private const val KEY_COLOR_STYLE = "colorStyle"
 
     /** The tags the switch offers; the empty string means "follow the device". */
     val LANGUAGES = listOf("", "zh", "en")
@@ -52,5 +53,26 @@ object UiPreferences {
             Theme.Dark -> "dark"
         }
         prefs(context).edit { putString(KEY_THEME, value) }
+    }
+
+    /** The accent family; defaults to the sky-blue one this app shipped with. */
+    fun colorStyle(context: Context): ColorStyle =
+        when (prefs(context).getString(KEY_COLOR_STYLE, "sky")) {
+            "mint" -> ColorStyle.Mint
+            "cherry" -> ColorStyle.Cherry
+            "sunset" -> ColorStyle.Sunset
+            "grape" -> ColorStyle.Grape
+            else -> ColorStyle.Sky
+        }
+
+    fun storeColorStyle(context: Context, style: ColorStyle) {
+        val value = when (style) {
+            ColorStyle.Sky -> "sky"
+            ColorStyle.Mint -> "mint"
+            ColorStyle.Cherry -> "cherry"
+            ColorStyle.Sunset -> "sunset"
+            ColorStyle.Grape -> "grape"
+        }
+        prefs(context).edit { putString(KEY_COLOR_STYLE, value) }
     }
 }

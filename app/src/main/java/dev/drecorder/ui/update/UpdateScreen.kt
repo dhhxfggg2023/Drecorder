@@ -4,13 +4,22 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -19,8 +28,8 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -30,9 +39,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.drecorder.R
 import dev.drecorder.data.UpdateSafety
+import dev.drecorder.ui.design.IconTile
+import dev.drecorder.ui.design.OutlinedActionButton
+import dev.drecorder.ui.design.PrimaryActionButton
+import dev.drecorder.ui.design.TextActionButton
 
 /** What the update screen is currently showing. */
 sealed interface UpdateUiState {
@@ -113,12 +127,27 @@ fun UpdateScreen(
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.surface,
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.update_title)) },
-                navigationIcon = {
-                    TextButton(onClick = onBack) { Text(stringResource(R.string.record_back)) }
+                title = {
+                    Text(
+                        text = stringResource(R.string.update_title),
+                        fontWeight = FontWeight.Bold,
+                    )
                 },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.record_back),
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
+                ),
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -127,25 +156,41 @@ fun UpdateScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(innerPadding)
-                .padding(horizontal = 16.dp),
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 4.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Card(modifier = Modifier.fillMaxWidth()) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                shape = MaterialTheme.shapes.large,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Text(
-                        text = stringResource(R.string.update_current, currentVersionName),
-                        style = MaterialTheme.typography.titleSmall,
-                    )
-                    Text(
-                        text = lastCheckLabel
-                            ?.let { stringResource(R.string.update_last_check, it) }
-                            ?: stringResource(R.string.update_never),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconTile(
+                            icon = Icons.Filled.CloudDownload,
+                            size = 46.dp,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        )
+                        Spacer(Modifier.padding(horizontal = 6.dp))
+                        Column {
+                            Text(
+                                text = stringResource(R.string.update_current, currentVersionName),
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Text(
+                                text = lastCheckLabel
+                                    ?.let { stringResource(R.string.update_last_check, it) }
+                                    ?: stringResource(R.string.update_never),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
 
                     when (state) {
                         UpdateUiState.Checking -> {
@@ -173,9 +218,11 @@ fun UpdateScreen(
                                 Text(text = state.notes, style = MaterialTheme.typography.bodySmall)
                             }
                             DataSafetyNote(dataSafety)
-                            Button(onClick = onDownload, modifier = Modifier.fillMaxWidth()) {
-                                Text(stringResource(R.string.update_download))
-                            }
+                            PrimaryActionButton(
+                                text = stringResource(R.string.update_download),
+                                onClick = onDownload,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
                         }
 
                         is UpdateUiState.Downloading -> {
@@ -219,16 +266,17 @@ fun UpdateScreen(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.error,
                                 )
-                                Button(
+                                PrimaryActionButton(
+                                    text = stringResource(R.string.update_unknown_sources),
                                     onClick = onOpenUnknownSources,
                                     modifier = Modifier.fillMaxWidth(),
-                                ) {
-                                    Text(stringResource(R.string.update_unknown_sources))
-                                }
+                                )
                             } else {
-                                Button(onClick = onInstall, modifier = Modifier.fillMaxWidth()) {
-                                    Text(stringResource(R.string.update_install))
-                                }
+                                PrimaryActionButton(
+                                    text = stringResource(R.string.update_install),
+                                    onClick = onInstall,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
                             }
                         }
 
@@ -244,35 +292,32 @@ fun UpdateScreen(
                     // "Install" it offered to throw the downloaded file away
                     // right before using it (m01839).
                     if (state.canCheckAgain) {
-                        Button(
+                        TonalCheckButton(
+                            text = if (state is UpdateUiState.Checking) {
+                                stringResource(R.string.update_checking)
+                            } else {
+                                stringResource(R.string.update_check)
+                            },
                             onClick = onCheck,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(
-                                if (state is UpdateUiState.Checking) {
-                                    stringResource(R.string.update_checking)
-                                } else {
-                                    stringResource(R.string.update_check)
-                                },
-                            )
-                        }
+                        )
                     }
 
                     // Never leave the user stuck when the download or a mirror fails.
-                    TextButton(onClick = onOpenReleases) {
-                        Text(stringResource(R.string.update_open_releases))
-                    }
+                    TextActionButton(
+                        text = stringResource(R.string.update_open_releases),
+                        onClick = onOpenReleases,
+                    )
                 }
             }
 
             Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                shape = MaterialTheme.shapes.large,
                 modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                ),
             ) {
                 Column(
-                    modifier = Modifier.padding(16.dp),
+                    modifier = Modifier.padding(18.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Row(
@@ -281,9 +326,15 @@ fun UpdateScreen(
                             .clickable { onAutoCheckChange(!autoCheck) },
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        IconTile(
+                            icon = Icons.Filled.Settings,
+                            size = 38.dp,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        )
+                        Spacer(Modifier.padding(horizontal = 5.dp))
                         Text(
                             text = stringResource(R.string.update_auto_check),
-                            style = MaterialTheme.typography.titleSmall,
+                            style = MaterialTheme.typography.titleMedium,
                             modifier = Modifier.weight(1f),
                         )
                         Switch(checked = autoCheck, onCheckedChange = onAutoCheckChange)
@@ -300,14 +351,27 @@ fun UpdateScreen(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    TextButton(
-                        onClick = { onManifestUrlChange(urlDraft.trim()) },
+                    TextActionButton(
+                        // This is an action, not a receipt: the old label said
+                        // "settings saved" before anything had been saved.
+                        text = stringResource(R.string.common_save),
                         enabled = urlDraft.isNotBlank() && urlDraft.trim() != manifestUrl,
-                    ) { Text(stringResource(R.string.settings_saved)) }
+                        onClick = { onManifestUrlChange(urlDraft.trim()) },
+                    )
                 }
             }
         }
     }
+}
+
+/** The secondary "check again" action: tonal, full width, same geometry as the primary. */
+@Composable
+private fun TonalCheckButton(text: String, onClick: () -> Unit) {
+    OutlinedActionButton(
+        text = text,
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 /**
@@ -349,6 +413,7 @@ private fun StatusText(text: String, highlight: Boolean = false, isError: Boolea
     Text(
         text = text,
         style = MaterialTheme.typography.bodyMedium,
+        fontWeight = if (highlight) FontWeight.SemiBold else FontWeight.Normal,
         color = when {
             isError -> MaterialTheme.colorScheme.error
             highlight -> MaterialTheme.colorScheme.primary
@@ -360,7 +425,7 @@ private fun StatusText(text: String, highlight: Boolean = false, isError: Boolea
 /** A byte count as something a person can read: "12.3 MB". */
 internal fun formatBytes(bytes: Long): String = when {
     bytes <= 0L -> "0 B"
-    bytes < 1_024L -> "$bytes B"
+    bytes < 1_024L -> bytes.toString() + " B"
     bytes < 1_048_576L -> "%.1f KB".format(bytes / 1_024.0)
     else -> "%.1f MB".format(bytes / 1_048_576.0)
 }

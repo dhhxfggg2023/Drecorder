@@ -62,13 +62,20 @@ import dev.drecorder.data.SilentMarker
 import dev.drecorder.data.UpdateSafety
 import dev.drecorder.ui.DrecorderNavigationBar
 import dev.drecorder.ui.DrecorderTheme
+import dev.drecorder.ui.design.TextActionButton
+import dev.drecorder.ui.design.TonalActionButton
 import dev.drecorder.ui.NavPage
 import dev.drecorder.ui.UiPreferences
 import dev.drecorder.ui.editor.EditorScreen
 import dev.drecorder.ui.home.HomeScreen
 import dev.drecorder.ui.library.LibraryScreen
 import dev.drecorder.ui.library.defaultOutputDirectory
+import dev.drecorder.ui.settings.AboutSettingsScreen
+import dev.drecorder.ui.settings.AppearanceSettingsScreen
+import dev.drecorder.ui.settings.AudioSettingsScreen
+import dev.drecorder.ui.settings.ScopeSettingsScreen
 import dev.drecorder.ui.settings.SettingsScreen
+import dev.drecorder.ui.settings.StorageSettingsScreen
 import dev.drecorder.ui.update.UpdateScreen
 import dev.drecorder.waveforms.WaveformPrecompute
 import kotlinx.coroutines.flow.StateFlow
@@ -124,7 +131,10 @@ class MainActivity : ComponentActivity() {
         consumeSharedAudio(intent)
         enableEdgeToEdge()
         setContent {
-            DrecorderTheme(darkTheme = UiPreferences.theme(this).resolvedDark()) {
+            DrecorderTheme(
+                darkTheme = UiPreferences.theme(this).resolvedDark(),
+                colorStyle = UiPreferences.colorStyle(this),
+            ) {
                 DrecorderApp(onRestartUi = ::restartUi, sharedAudio = sharedAudio)
             }
         }
@@ -153,7 +163,18 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Screen { Home, Library, Settings, Update, Editor }
+private enum class Screen {
+    Home,
+    Library,
+    Settings,
+    SettingsScope,
+    SettingsAudio,
+    SettingsStorage,
+    SettingsAppearance,
+    SettingsAbout,
+    Update,
+    Editor,
+}
 
 @Composable
 private fun DrecorderApp(
@@ -189,6 +210,12 @@ private fun DrecorderApp(
             }
 
             Screen.Update -> Screen.Settings
+            Screen.SettingsScope,
+            Screen.SettingsAudio,
+            Screen.SettingsStorage,
+            Screen.SettingsAppearance,
+            Screen.SettingsAbout -> Screen.Settings
+
             else -> Screen.Home
         }
     }
@@ -491,6 +518,7 @@ private fun DrecorderApp(
             recordingCount = recordingCount,
             targetSilent = targetSilent && captureState is CaptureState.Recording,
             level = captureLevel,
+            sizePerMinuteBytes = settings.estimatedBytesPerMinute,
             bottomBar = {
                 DrecorderNavigationBar(NavPage.Home) { page ->
                     screen = if (page == NavPage.Settings) Screen.Settings else Screen.Home
@@ -536,8 +564,58 @@ private fun DrecorderApp(
 
         Screen.Settings -> SettingsScreen(
             settings = settings,
+            appCount = settings.appUids.size,
             language = UiPreferences.language(context),
             theme = UiPreferences.theme(context),
+            colorStyle = UiPreferences.colorStyle(context),
+            onOpenScope = { screen = Screen.SettingsScope },
+            onOpenAudio = { screen = Screen.SettingsAudio },
+            onOpenStorage = { screen = Screen.SettingsStorage },
+            onOpenAppearance = { screen = Screen.SettingsAppearance },
+            onOpenUpdate = { screen = Screen.Update },
+            onOpenAbout = { screen = Screen.SettingsAbout },
+            bottomBar = {
+                DrecorderNavigationBar(NavPage.Settings) { page ->
+                    screen = if (page == NavPage.Settings) Screen.Settings else Screen.Home
+                }
+            },
+        )
+
+        Screen.SettingsScope -> ScopeSettingsScreen(
+            settings = settings,
+            appCount = settings.appUids.size,
+            onRangeChange = { appsOnly, uids ->
+                RecordSettings.storeRange(context, appsOnly, uids)
+                settings = RecordSettings.load(context)
+            },
+            onBack = { screen = Screen.Settings },
+        )
+
+        Screen.SettingsAudio -> AudioSettingsScreen(
+            settings = settings,
+            aacAvailable = aacAvailable,
+            onChange = { sampleRate, channelCount, bitRate, format ->
+                RecordSettings.store(context, sampleRate, channelCount, bitRate, format)
+                settings = RecordSettings.load(context)
+            },
+            onBack = { screen = Screen.Settings },
+        )
+
+        Screen.SettingsStorage -> StorageSettingsScreen(
+            settings = settings,
+            outputDirectory = RecordSettings.outputDirectory(context),
+            onSegmentChange = { minutes ->
+                RecordSettings.storeSegmentMinutes(context, minutes)
+                settings = RecordSettings.load(context)
+            },
+            onPickOutputDirectory = { directoryLauncher.launch(null) },
+            onBack = { screen = Screen.Settings },
+        )
+
+        Screen.SettingsAppearance -> AppearanceSettingsScreen(
+            language = UiPreferences.language(context),
+            theme = UiPreferences.theme(context),
+            colorStyle = UiPreferences.colorStyle(context),
             onLanguageChange = { tag ->
                 UiPreferences.storeLanguage(context, tag)
                 onRestartUi()
@@ -546,32 +624,14 @@ private fun DrecorderApp(
                 UiPreferences.storeTheme(context, chosen)
                 onRestartUi()
             },
-            aacAvailable = aacAvailable,
-            outputDirectory = RecordSettings.outputDirectory(context),
-            notice = notice,
-            onNoticeShown = { notice = null },
-            onBack = { screen = Screen.Home },
-            onPickOutputDirectory = { directoryLauncher.launch(null) },
-            onOpenUpdate = { screen = Screen.Update },
-            onRangeChange = { appsOnly, uids ->
-                RecordSettings.storeRange(context, appsOnly, uids)
-                settings = RecordSettings.load(context)
+            onColorStyleChange = { chosen ->
+                UiPreferences.storeColorStyle(context, chosen)
+                onRestartUi()
             },
-            appCount = settings.appUids.size,
-            onSegmentChange = { minutes ->
-                RecordSettings.storeSegmentMinutes(context, minutes)
-                settings = RecordSettings.load(context)
-            },
-            onChange = { sampleRate, channelCount, bitRate, format ->
-                RecordSettings.store(context, sampleRate, channelCount, bitRate, format)
-                settings = RecordSettings.load(context)
-            },
-            bottomBar = {
-                DrecorderNavigationBar(NavPage.Settings) { page ->
-                    screen = if (page == NavPage.Settings) Screen.Settings else Screen.Home
-                }
-            },
+            onBack = { screen = Screen.Settings },
         )
+
+        Screen.SettingsAbout -> AboutSettingsScreen(onBack = { screen = Screen.Settings })
 
         Screen.Update -> UpdateScreen(
             currentVersionName = appVersionName(context),
@@ -611,18 +671,24 @@ private fun DrecorderApp(
             title = { Text(stringResource(R.string.overlay_permission_title)) },
             text = { Text(stringResource(R.string.overlay_permission_body)) },
             confirmButton = {
-                TextButton(onClick = {
-                    overlayPrompt = false
-                    overlayPermissionLauncher.launch(CaptureOverlay.permissionIntent(context))
-                }) { Text(stringResource(R.string.overlay_permission_open)) }
+                TonalActionButton(
+                    text = stringResource(R.string.overlay_permission_open),
+                    onClick = {
+                        overlayPrompt = false
+                        overlayPermissionLauncher.launch(CaptureOverlay.permissionIntent(context))
+                    },
+                )
             },
             dismissButton = {
-                TextButton(onClick = {
-                    overlayPrompt = false
-                    val scope = pendingStartScope
-                    pendingStartScope = null
-                    scope?.let(::beginCapture)
-                }) { Text(stringResource(R.string.overlay_permission_skip)) }
+                TextActionButton(
+                    text = stringResource(R.string.overlay_permission_skip),
+                    onClick = {
+                        overlayPrompt = false
+                        val scope = pendingStartScope
+                        pendingStartScope = null
+                        scope?.let(::beginCapture)
+                    },
+                )
             },
         )
     }

@@ -26,6 +26,17 @@ data class RecordSettings(
 
     val isWav: Boolean get() = encoder is EncoderSpec.Wav
 
+    /**
+     * How much disk one minute of this configuration costs, in bytes.
+     *
+     * The home screen shows it so the user can tell whether the quality they
+     * picked is worth it *before* recording, instead of after: 320 kbps stereo is
+     * ~2.3 MB/min, an hour is ~140 MB, and that is not obvious from a bitrate
+     * number.
+     */
+    val estimatedBytesPerMinute: Long
+        get() = bytesPerMinute(sampleRate, channelCount, bitRate, isWav)
+
     val segmentDurationMs: Long get() = segmentMinutes * 60_000L
 
     /** The filter the capture service should apply right now. */
@@ -49,6 +60,20 @@ data class RecordSettings(
 
         /** Slice lengths offered in settings; 0 means "one file, however long". */
         val SEGMENT_CHOICES = listOf(0, 5, 15, 30, 60)
+
+        /**
+         * Bytes per minute of audio for one configuration.
+         *
+         * AAC is a constant bitrate, so the arithmetic is exact; WAV is 16-bit
+         * PCM, so it follows from the sample rate and the channel count (and is
+         * why switching to WAV multiplies the estimate by six).
+         */
+        fun bytesPerMinute(sampleRate: Int, channelCount: Int, bitRate: Int, isWav: Boolean): Long =
+            if (isWav) {
+                sampleRate.toLong() * channelCount * 2L * 60L
+            } else {
+                bitRate.toLong() / 8L * 60L
+            }
 
         val DEFAULT = RecordSettings(
             sampleRate = 48_000,

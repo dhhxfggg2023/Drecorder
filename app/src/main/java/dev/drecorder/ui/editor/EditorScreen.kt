@@ -58,6 +58,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.drecorder.R
+import dev.drecorder.ui.design.OutlinedActionButton
+import dev.drecorder.ui.design.TextActionButton
+import dev.drecorder.ui.design.TonalActionButton
 import dev.drecorder.audio.edit.AudioFormatProbe
 import dev.drecorder.audio.edit.AudioFormatSpec
 import dev.drecorder.audio.edit.EditFormats
@@ -968,13 +971,18 @@ fun EditorScreen(
             TopAppBar(
                 title = {
                     Text(
-                        if (runs.size > 1) {
+                        text = if (runs.size > 1) {
                             stringResource(R.string.editor_title_merged, runs.size)
                         } else {
                             stringResource(R.string.editor_title)
                         },
+                        fontWeight = FontWeight.Bold,
                     )
                 },
+                colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
+                ),
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Filled.ArrowBack, contentDescription = null)
@@ -988,15 +996,15 @@ fun EditorScreen(
                     // a button that appears only in the state the user is not in
                     // is a button that does not exist: the dialog then says what
                     // to do about it.
-                    TextButton(onClick = { showOrder = true }) {
-                        Text(stringResource(R.string.editor_order))
-                    }
-                    TextButton(
-                        onClick = { showExportDialog = true },
+                    TextActionButton(
+                        text = stringResource(R.string.editor_order),
+                        onClick = { showOrder = true },
+                    )
+                    TextActionButton(
+                        text = stringResource(R.string.editor_export),
                         enabled = !exporting && clips.isNotEmpty() && totalMs > 0L,
-                    ) {
-                        Text(stringResource(R.string.editor_export))
-                    }
+                        onClick = { showExportDialog = true },
+                    )
                 },
             )
         },
@@ -1196,10 +1204,12 @@ fun EditorScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                TextButton(onClick = { addCut() }) {
-                    Text(stringResource(R.string.editor_marker_add))
-                }
-                TextButton(
+                TextActionButton(
+                    text = stringResource(R.string.editor_marker_add),
+                    onClick = { addCut() },
+                )
+                TextActionButton(
+                    text = stringResource(R.string.editor_insert_audio),
                     onClick = {
                         insertCandidates = null
                         scope.launch {
@@ -1208,9 +1218,7 @@ fun EditorScreen(
                             }
                         }
                     },
-                ) {
-                    Text(stringResource(R.string.editor_insert_audio))
-                }
+                )
             }
 
             // The transport: what a thumb reaches first.
@@ -1281,24 +1289,28 @@ fun EditorScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = {
-                    showExportDialog = false
-                    startExport(null)
-                }) { Text(stringResource(R.string.editor_export_save_as)) }
+                TonalActionButton(
+                    text = stringResource(R.string.editor_export_save_as),
+                    onClick = {
+                        showExportDialog = false
+                        startExport(null)
+                    },
+                )
             },
             dismissButton = {
                 val single = clips.map { it.file }.distinct().singleOrNull()
-                TextButton(
+                OutlinedActionButton(
+                    text = stringResource(R.string.editor_export_overwrite),
+                    enabled = single != null,
                     onClick = {
                         showExportDialog = false
-                        if (single == null) return@TextButton
+                        if (single == null) return@OutlinedActionButton
                         pendingEdit = PendingEdit.Overwrite(
                             waveforms[single.path]?.displayName ?: single.name,
                             single,
                         )
                     },
-                    enabled = single != null,
-                ) { Text(stringResource(R.string.editor_export_overwrite)) }
+                )
             },
         )
     }

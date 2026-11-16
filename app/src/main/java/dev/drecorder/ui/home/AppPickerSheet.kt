@@ -5,27 +5,31 @@ import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckBox
-import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -40,11 +44,14 @@ import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.drecorder.R
 import dev.drecorder.audio.AppSelection
 import dev.drecorder.data.LaunchableApp
+import dev.drecorder.ui.design.TextActionButton
+import dev.drecorder.ui.design.TonalActionButton
 
 /**
  * Multi-select sheet listing launchable apps.
@@ -53,6 +60,9 @@ import dev.drecorder.data.LaunchableApp
  * isolated process will not be captured by that uid alone, which is why the note
  * at the bottom says so out loud instead of leaving the user with silence
  * (docs/DESIGN.md §2.3, §8).
+ *
+ * The selected rows get a soft primary tint and a
+ * filled check, the confirm action is a pill, and the title is bold.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -72,20 +82,20 @@ fun AppPickerSheet(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 24.dp),
+                    .padding(start = 24.dp, end = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
                     text = stringResource(R.string.picker_title),
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f),
                 )
-                TextButton(
-                    onClick = { onConfirm(AppSelection(selected.toList())) },
+                TonalActionButton(
+                    text = stringResource(R.string.picker_confirm),
                     enabled = selected.isNotEmpty(),
-                ) {
-                    Text(stringResource(R.string.picker_confirm))
-                }
+                    onClick = { onConfirm(AppSelection(selected.toList())) },
+                )
             }
 
             when {
@@ -109,10 +119,22 @@ fun AppPickerSheet(
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodyMedium,
                     )
-                    TextButton(onClick = onRetry) { Text(stringResource(R.string.picker_retry)) }
+                    TextActionButton(
+                        text = stringResource(R.string.picker_retry),
+                        onClick = onRetry,
+                    )
                 }
 
-                else -> LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+                else -> LazyColumn(
+                    modifier = Modifier.heightIn(max = 420.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        start = 16.dp,
+                        end = 16.dp,
+                        top = 4.dp,
+                        bottom = 4.dp,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
                     items(items = apps, key = { it.packageName }) { app ->
                         AppRow(
                             app = app,
@@ -152,36 +174,47 @@ private fun AppRow(
         }.getOrNull()
     }
     val painter = remember(icon) { icon?.let { BitmapPainter(it) } }
+    val scheme = MaterialTheme.colorScheme
 
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .toggleable(value = checked, role = Role.Checkbox, onValueChange = { onToggle() })
-            .padding(horizontal = 24.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    Surface(
+        color = if (checked) scheme.primaryContainer else scheme.surfaceContainerLowest,
+        shape = RoundedCornerShape(percent = 28),
+        modifier = Modifier.fillMaxWidth(),
     ) {
-        if (painter != null) {
-            Image(
-                painter = painter,
-                contentDescription = null,
-                modifier = Modifier.size(40.dp),
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .toggleable(value = checked, role = Role.Checkbox, onValueChange = { onToggle() })
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            if (painter != null) {
+                Image(
+                    painter = painter,
+                    contentDescription = null,
+                    modifier = Modifier.size(38.dp),
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .background(scheme.surfaceContainerHighest, RoundedCornerShape(10.dp)),
+                )
+            }
+            Text(
+                text = app.label,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
             )
-        } else {
-            Box(modifier = Modifier.size(40.dp))
+            Icon(
+                imageVector = if (checked) Icons.Filled.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
+                contentDescription = null,
+                tint = if (checked) scheme.primary else scheme.outline,
+            )
         }
-        Text(
-            text = app.label,
-            style = MaterialTheme.typography.bodyLarge,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        Icon(
-            imageVector = if (checked) Icons.Filled.CheckBox else Icons.Filled.CheckBoxOutlineBlank,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-        )
     }
 }
 

@@ -2,32 +2,25 @@ package dev.drecorder.ui.editor
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.drecorder.R
 import dev.drecorder.audio.edit.EditSegment
 import dev.drecorder.data.formatDuration
+import dev.drecorder.ui.design.CaptionIconButton
 
 /**
  * What can be done to the stretch the user picked on the waveform.
@@ -39,6 +32,10 @@ import dev.drecorder.data.formatDuration
  * All three are about the picked stretch and nothing else: take it out, keep
  * only it, or play it a second time in place. Each one asks first, because none
  * of them can be undone from inside the editor.
+ *
+ * Three icon buttons with 10sp captions:
+ * three pill buttons with Chinese labels overflowed a narrow phone, and an icon
+ * alone did not say what it does (the original complaint behind m00376).
  */
 @Composable
 fun SegmentActionsRow(
@@ -66,53 +63,30 @@ fun SegmentActionsRow(
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            SegmentAction(
+            CaptionIconButton(
                 icon = Icons.Filled.Delete,
-                label = R.string.editor_segment_delete,
+                contentDescription = stringResource(R.string.editor_segment_delete),
+                caption = stringResource(R.string.editor_segment_delete),
                 enabled = enabled,
+                danger = true,
                 onClick = onDelete,
             )
-            SegmentAction(
+            CaptionIconButton(
                 icon = Icons.Filled.ContentCut,
-                label = R.string.editor_segment_keep,
+                contentDescription = stringResource(R.string.editor_segment_keep),
+                caption = stringResource(R.string.editor_segment_keep),
                 enabled = enabled,
                 onClick = onKeepOnly,
             )
-            SegmentAction(
+            CaptionIconButton(
                 icon = Icons.Filled.ContentCopy,
-                label = R.string.editor_segment_repeat,
+                contentDescription = stringResource(R.string.editor_segment_repeat),
+                caption = stringResource(R.string.editor_segment_repeat),
                 enabled = enabled && repeatEnabled,
                 onClick = onRepeat,
             )
         }
-    }
-}
-
-@Composable
-private fun SegmentAction(
-    icon: ImageVector,
-    label: Int,
-    enabled: Boolean,
-    onClick: () -> Unit,
-) {
-    TextButton(
-        onClick = onClick,
-        enabled = enabled,
-        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-        modifier = Modifier.heightIn(min = 44.dp),
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            modifier = Modifier.size(18.dp),
-        )
-        Spacer(modifier = Modifier.width(4.dp))
-        Text(
-            text = stringResource(label),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
     }
 }

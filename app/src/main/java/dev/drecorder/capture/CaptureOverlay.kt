@@ -75,7 +75,7 @@ class CaptureOverlay(
         val dot = View(context).apply {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(0xFFFF5252.toInt())
+                setColor(0xFFFF4F81.toInt())
             }
         }
         val stop = TextView(context).apply {
@@ -99,10 +99,10 @@ class CaptureOverlay(
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(9), dp(5), dp(6), dp(5))
             background = GradientDrawable().apply {
-                cornerRadius = dp(16).toFloat()
+                cornerRadius = dp(18).toFloat()
                 // 70% opacity: readable over bright and dark content, and the video
                 // behind it is still visible.
-                setColor(0xB3151B1B.toInt())
+                setColor(0xCC0B1420.toInt())
             }
             elevation = dp(4).toFloat()
             addView(dot, LinearLayout.LayoutParams(dp(6), dp(6)).apply { rightMargin = dp(6) })
