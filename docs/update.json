@@ -1,17 +1,17 @@
-{
-  "versionCode": 24,
-  "versionName": "0.3.14",
-  "minSupportedVersionCode": 1,
-  "apkUrl": "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.14/drecorder-0.3.14.apk",
-  "mirrors": [
-    "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.14/drecorder-0.3.14.apk",
-    "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.14/drecorder-0.3.14.apk",
-    "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.14/drecorder-0.3.14.apk"
-  ],
-  "sizeBytes": 53247720,
-  "sha256": "b866646af85dcebd69a068fc5b350a0baafbcc26d3794168042c0c9b4f270136",
-  "signingCertSha256": "4f070db7fd59b883e7ab771f88cda4bc80ce3b97e1defcf9e7faeab5a496a348",
-  "publishedAt": "2026-11-04T14:46:03Z",
-  "releaseNotes": "v0.3.14\n\n## 修复（0.3.13 发布后审计）\n\n- **分享导入恢复正常**：从微信、QQ、文件管理器等分享 content:// 音频时，改为向系统解析器查询真实文件名，并按 MIME 推断扩展名；此前这类分享几乎全部被误判为「不支持的格式」而拒绝\n- **导入文件名路径安全**：显示名中的路径分隔符会被替换，避免写入不存在的子目录导致导入失败\n- **后台波形队列在录音结束后继续**：此前录音会中断队列且不再重启，剩余文件要等下次冷启动才计算\n- **坏文件不再静默停掉整个队列**：某个无法解码的文件（扩展名对但内容损坏）现在被隔离，其余排队文件照常预计算\n- 新增回归单测：路径安全命名；全量 328 例测试 0 失败，lint 0 error\n\n签名证书与 0.3.13 / 0.3.12 一致，可原地覆盖安装，录音与设置全部保留。",
-  "force": false
+﻿{
+    "versionCode":  25,
+    "versionName":  "0.3.15",
+    "minSupportedVersionCode":  1,
+    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.15/drecorder-0.3.15.apk",
+    "mirrors":  [
+                    "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.15/drecorder-0.3.15.apk",
+                    "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.15/drecorder-0.3.15.apk",
+                    "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.15/drecorder-0.3.15.apk"
+                ],
+    "sizeBytes":  53319364,
+    "sha256":  "c498425f9250cfd4fadc9b6263ef5559bcf832afd4d5bd307b7e0406b70c9847",
+    "signingCertSha256":  "4f070db7fd59b883e7ab771f88cda4bc80ce3b97e1defcf9e7faeab5a496a348",
+    "publishedAt":  "2026-11-16T11:53:27Z",
+    "releaseNotes":  "v0.3.15\n\n## 界面\n- 全新视觉语言：晴空蓝/青/樱粉渐变、圆角卡片、胶囊按钮、悬浮空心胶囊底栏\n- 首页：录制圆盘改渐变 + 呼吸光晕；新增「每分钟约 X MB」容量提示；录音入口改卡片\n- 录音列表：卡片化 + 渐变图标块；多选操作条改底部悬浮胶囊；空状态带「导入音频」\n- 编辑器：标题加粗；工具栏动作与导出对话框改胶囊按钮；片段操作改「图标 + 小字」\n- 设置拆成子页面：录制范围 / 音频质量 / 存储 / 外观 / 更新 / 关于\n- 新增 5 套颜色风格：晴空、薄荷、樱粉、落日、紫罗兰（浅色与深色各一套完整配色）\n- 首页录制按钮补无障碍语义；更新地址栏改为真正的「保存」动作\n- 单测 328 例 0 失败，lint 0 error",
+    "force":  false
 }
