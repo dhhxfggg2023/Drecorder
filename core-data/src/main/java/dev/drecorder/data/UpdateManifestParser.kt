@@ -10,7 +10,10 @@ import org.json.JSONObject
  * because a malformed manifest must produce "no update" and never a crash.
  */
 fun parseUpdateManifest(json: String): UpdateManifest? = runCatching {
-    val root = JSONObject(json)
+    // Windows PowerShell's `Set-Content -Encoding utf8` writes a UTF-8 BOM, and
+    // org.json rejects it. The release script used to produce exactly such a
+    // manifest, which silently turned every update check into "no update".
+    val root = JSONObject(json.removePrefix("\uFEFF").trim())
     val mirrors = root.optJSONArray("mirrors")?.let { array ->
         (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotBlank) }
     }.orEmpty()
