@@ -1,17 +1,17 @@
 {
-    "versionCode":  25,
-    "versionName":  "0.3.15",
-    "minSupportedVersionCode":  1,
-    "apkUrl":  "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.15/drecorder-0.3.15.apk",
-    "mirrors":  [
-                    "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.15/drecorder-0.3.15.apk",
-                    "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.15/drecorder-0.3.15.apk",
-                    "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.15/drecorder-0.3.15.apk"
-                ],
-    "sizeBytes":  53319364,
-    "sha256":  "c498425f9250cfd4fadc9b6263ef5559bcf832afd4d5bd307b7e0406b70c9847",
-    "signingCertSha256":  "4f070db7fd59b883e7ab771f88cda4bc80ce3b97e1defcf9e7faeab5a496a348",
-    "publishedAt":  "2026-11-16T11:53:27Z",
-    "releaseNotes":  "v0.3.15\n\n## 界面\n- 全新视觉语言：晴空蓝/青/樱粉渐变、圆角卡片、胶囊按钮、悬浮空心胶囊底栏\n- 首页：录制圆盘改渐变 + 呼吸光晕；新增「每分钟约 X MB」容量提示；录音入口改卡片\n- 录音列表：卡片化 + 渐变图标块；多选操作条改底部悬浮胶囊；空状态带「导入音频」\n- 编辑器：标题加粗；工具栏动作与导出对话框改胶囊按钮；片段操作改「图标 + 小字」\n- 设置拆成子页面：录制范围 / 音频质量 / 存储 / 外观 / 更新 / 关于\n- 新增 5 套颜色风格：晴空、薄荷、樱粉、落日、紫罗兰（浅色与深色各一套完整配色）\n- 首页录制按钮补无障碍语义；更新地址栏改为真正的「保存」动作\n- 单测 328 例 0 失败，lint 0 error",
-    "force":  false
+    "versionCode": 26,
+    "versionName": "0.3.16",
+    "minSupportedVersionCode": 1,
+    "apkUrl": "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.16/drecorder-0.3.16.apk",
+    "mirrors": [
+        "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.16/drecorder-0.3.16.apk",
+        "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.16/drecorder-0.3.16.apk",
+        "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.16/drecorder-0.3.16.apk"
+    ],
+    "sizeBytes": 53319800,
+    "sha256": "953f9522f6459fc98654a5bf7f35c1ec391ea335b162677438ec7c7952048f7e",
+    "signingCertSha256": "4f070db7fd59b883e7ab771f88cda4bc80ce3b97e1defcf9e7faeab5a496a348",
+    "publishedAt": "2026-11-25T04:18:49Z",
+    "releaseNotes": "v0.3.16\n\n## 修复\n- 录音列表现在显示录音的名字：重命名后，卡片标题直接就是你起的名字（#1）\n- 没有改过名的录音外观不变，仍以录制时间作标题\n- 有名字的录音把录制时间、时长、大小放在第二行\n- 重命名对话框只编辑名字，`.m4a` 扩展名自动保留；删除确认框也按卡片上的名字念\n\n## 其它\n- 无其它行为变化；core-data 单测 63 例 0 失败，assembleDebug / assembleRelease 均通过",
+    "force": false
 }
