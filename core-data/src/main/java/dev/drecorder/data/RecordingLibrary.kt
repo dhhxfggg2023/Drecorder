@@ -21,6 +21,21 @@ data class Recording(
     val wasEdited: Boolean = false,
 ) {
     val displayName: String get() = file.name
+
+    /** The file name without its extension: what a row can show on one line. */
+    val nameWithoutExtension: String get() = file.name.substringBeforeLast('.', file.name)
+
+    /**
+     * The name the user gave this recording, or null while the file still carries
+     * the capture engine's name.
+     *
+     * `drecorder-20261018-101722-p01` encodes the time, not a subject: a list that
+     * led with it would be unreadable, and — worse — a rename would change nothing
+     * the user can see (issue #1). A typed name is the one part of this row that is
+     * the user's own, so the row leads with it when it exists.
+     */
+    val customName: String?
+        get() = nameWithoutExtension.takeUnless { it.isGeneratedRecordingName() }
 }
 
 /** Which day a recording belongs to, expressed without user-facing text. */
@@ -180,6 +195,16 @@ class RecordingLibrary(
         return renamed
     }
 }
+
+/**
+ * Whether this stem is one the capture engine generated:
+ * `drecorder-yyyyMMdd-HHmmss`, plus the `-pNN` segment number or the `-N` /
+ * `-<millis>` disambiguator `uniqueBaseName` appends when two sessions started
+ * inside the same second.
+ */
+private val GENERATED_RECORDING_NAME = Regex("""^drecorder-\d{8}-\d{6}(-p\d{2}|-\d+)?$""")
+
+internal fun String.isGeneratedRecordingName(): Boolean = GENERATED_RECORDING_NAME.matches(this)
 
 internal fun String.isRecordingExtension(): Boolean =
     endsWith(".m4a", ignoreCase = true) ||

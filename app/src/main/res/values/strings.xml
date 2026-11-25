@@ -133,6 +133,7 @@
     <string name="library_loading">Reading the recordings…</string>
     <string name="library_load_error">Could not read the recordings</string>
     <string name="library_duration_size">%1$s · %2$s</string>
+    <string name="library_named_meta">%1$s · %2$s · %3$s</string>
     <string name="library_playing">Playing</string>
     <string name="library_delete">Delete</string>
     <string name="library_delete_confirm_title">Delete this recording?</string>

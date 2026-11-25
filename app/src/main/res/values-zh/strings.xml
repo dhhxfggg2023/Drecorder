@@ -133,6 +133,7 @@
     <string name="library_loading">正在读取录音列表…</string>
     <string name="library_load_error">读取录音列表失败</string>
     <string name="library_duration_size">%1$s · %2$s</string>
+    <string name="library_named_meta">%1$s · %2$s · %3$s</string>
     <string name="library_playing">正在播放</string>
     <string name="library_delete">删除</string>
     <string name="library_delete_confirm_title">删除这条录音？</string>

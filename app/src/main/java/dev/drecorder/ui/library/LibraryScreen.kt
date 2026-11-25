@@ -84,6 +84,7 @@ import dev.drecorder.ui.design.DrecorderEmptyState
 import dev.drecorder.ui.design.IconTile
 import dev.drecorder.ui.design.TextActionButton
 import dev.drecorder.ui.design.TonalActionButton
+import dev.drecorder.ui.recordingTitle
 import dev.drecorder.ui.recordingWhenLabel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -408,7 +409,9 @@ fun LibraryScreen(
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
             title = { Text(stringResource(R.string.library_delete_confirm_title)) },
-            text = { Text(stringResource(R.string.library_delete_confirm_body, target.displayName)) },
+            // The dialog names the recording the way the row does, so the file
+            // being deleted is the one the user just tapped.
+            text = { Text(stringResource(R.string.library_delete_confirm_body, recordingTitle(target))) },
             confirmButton = {
                 DangerConfirmButton(
                     text = stringResource(R.string.library_delete),
@@ -472,7 +475,10 @@ fun LibraryScreen(
 
     pendingRename?.let { target ->
         RenameDialog(
-            original = target.displayName,
+            // The dialog edits the name, not the file name: the extension is what
+            // the library needs to keep listing the recording, so it is not offered
+            // for editing (a typed name without one keeps the original format).
+            original = target.nameWithoutExtension,
             onDismiss = { pendingRename = null },
             onConfirm = { newName ->
                 pendingRename = null
@@ -578,13 +584,15 @@ private fun RecordingRow(
                     tint = scheme.onPrimaryContainer,
                 )
             }
-            // The when-line is the anchor of the row: it is what the user actually
-            // recognises a recording by (a file name is an implementation detail).
-            // Everything else hangs under it at a smaller weight, so a list of
-            // rows scans as one column of times instead of a wall of mixed text.
+            // A named recording leads with its name: the user typed it, so it is
+            // the one part of the row that says what this recording *is*. The time
+            // stays underneath, because the name does not replace it. Files that
+            // still carry the engine's generated name keep the time as the title —
+            // `drecorder-20261018-101722-p01` is not something anyone reads (issue #1).
+            val customName = recording.customName
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = recordingWhenLabel(recording),
+                    text = customName ?: recordingWhenLabel(recording),
                     style = MaterialTheme.typography.titleMedium.copy(fontSize = 17.sp),
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
@@ -593,13 +601,25 @@ private fun RecordingRow(
                 Spacer(Modifier.height(2.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = stringResource(
-                            R.string.library_duration_size,
-                            formatDuration(recording.durationMs),
-                            formatSize(recording.sizeBytes),
-                        ),
+                        text = if (customName != null) {
+                            stringResource(
+                                R.string.library_named_meta,
+                                recordingWhenLabel(recording),
+                                formatDuration(recording.durationMs),
+                                formatSize(recording.sizeBytes),
+                            )
+                        } else {
+                            stringResource(
+                                R.string.library_duration_size,
+                                formatDuration(recording.durationMs),
+                                formatSize(recording.sizeBytes),
+                            )
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = scheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
                     )
                     if (recording.wasSilent) {
                         Spacer(Modifier.width(8.dp))
