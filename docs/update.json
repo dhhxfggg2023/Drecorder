@@ -1,17 +1,17 @@
 {
-    "versionCode": 26,
-    "versionName": "0.3.16",
+    "versionCode": 27,
+    "versionName": "0.3.17",
     "minSupportedVersionCode": 1,
-    "apkUrl": "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.16/drecorder-0.3.16.apk",
+    "apkUrl": "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.17/drecorder-0.3.17.apk",
     "mirrors": [
-        "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.16/drecorder-0.3.16.apk",
-        "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.16/drecorder-0.3.16.apk",
-        "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.16/drecorder-0.3.16.apk"
+        "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.17/drecorder-0.3.17.apk",
+        "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.17/drecorder-0.3.17.apk",
+        "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.17/drecorder-0.3.17.apk"
     ],
-    "sizeBytes": 53319800,
-    "sha256": "953f9522f6459fc98654a5bf7f35c1ec391ea335b162677438ec7c7952048f7e",
+    "sizeBytes": 53337132,
+    "sha256": "695012733346626b9b2298a93d843d4c988e8a3b5cc00c10f3aa96a0d9eb9921",
     "signingCertSha256": "4f070db7fd59b883e7ab771f88cda4bc80ce3b97e1defcf9e7faeab5a496a348",
-    "publishedAt": "2026-11-25T04:18:49Z",
-    "releaseNotes": "v0.3.16\n\n## 修复\n- 录音列表现在显示录音的名字：重命名后，卡片标题直接就是你起的名字（#1）\n- 没有改过名的录音外观不变，仍以录制时间作标题\n- 有名字的录音把录制时间、时长、大小放在第二行\n- 重命名对话框只编辑名字，`.m4a` 扩展名自动保留；删除确认框也按卡片上的名字念\n\n## 其它\n- 无其它行为变化；core-data 单测 63 例 0 失败，assembleDebug / assembleRelease 均通过",
+    "publishedAt": "2026-11-26T00:52:38Z",
+    "releaseNotes": "v0.3.17\n\n## 修复\n- 重命名弹窗不再预填自动生成的文件名：默认空输入框 + 提示文字；已改过名的录音打开即全选，可直接打字覆盖；输入框右侧新增清空按钮（#2）\n- 分段录制时列表显示反了：已写完的分段不出现、正在写的分段却能删。现在每次切段都会更新正在写入的文件\n- 静音标记与波形缓存可能丢失：结束录制时先写完标记再关闭服务，不再被取消\n- 删除或重命名录音后，波形缓存会跟着删除或改名，不再残留或需要重新解码\n- 重命名成只有扩展名的名字会被拒绝，避免出现无标题的录音\n- 首页录音数量与列表中实际条数一致（录制中不再多算一条）\n- 分享时不再复用同名同大小但内容已变的缓存副本，并清理其它残留副本\n\n## 其它\n- core-data 66 例、core-audio 269 例单测全部通过；lint 0 error",
     "force": false
 }
