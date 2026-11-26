@@ -179,7 +179,15 @@ class PeakDecoder(
         var start = 0L
         while (start < totalMs) {
             if (cancelled.get()) return Result.Failure("cancelled", reason = Reason.Cancelled)
-            val end = (start + SEGMENT_MS).coerceAtMost(totalMs)
+            // The first segment is short on purpose. A two-minute segment of a
+            // long recording is a second or two of codec before anything at all
+            // is on screen, and opening a recording then shows an empty band
+            // (「点击进来之后加载慢了一点」). Fifteen seconds covers more than the
+            // screen ever shows on open and lands in a fraction of that time; the
+            // rest of the file is then decoded in big segments, where the size
+            // only decides how often the picture grows.
+            val segmentMs = if (start == 0L) FIRST_SEGMENT_MS else SEGMENT_MS
+            val end = (start + segmentMs).coerceAtMost(totalMs)
             val segmentStart = start
             val segment = decodeInternal(
                 file = file,
@@ -439,5 +447,14 @@ class PeakDecoder(
          * a second or two of the editor opening.
          */
         const val SEGMENT_MS = 120_000L
+
+        /**
+         * The length of the first segment of a long recording.
+         *
+         * Short enough that the waveform is on screen almost immediately, long
+         * enough that it covers the window the editor opens on several times
+         * over, so the user does not see it fill in while looking at it.
+         */
+        const val FIRST_SEGMENT_MS = 15_000L
     }
 }

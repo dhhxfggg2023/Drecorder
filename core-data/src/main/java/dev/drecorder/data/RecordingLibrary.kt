@@ -232,11 +232,19 @@ private val GENERATED_RECORDING_NAME = Regex("""^drecorder-\d{8}-\d{6}(-p\d{2}|-
 
 internal fun String.isGeneratedRecordingName(): Boolean = GENERATED_RECORDING_NAME.matches(this)
 
-internal fun String.isRecordingExtension(): Boolean =
-    endsWith(".m4a", ignoreCase = true) ||
-        endsWith(".wav", ignoreCase = true) ||
-        endsWith(".aac", ignoreCase = true) ||
-        endsWith(".ogg", ignoreCase = true)
+/**
+ * Whether this name is a recording the library can show.
+ *
+ * The list is [AudioImport.KNOWN]: an imported file has to be visible, so what
+ * the importer writes and what the library scans cannot be two different lists.
+ * Keeping them separate is what made an imported mp3 land on disk and never
+ * appear in the list.
+ */
+internal fun String.isRecordingExtension(): Boolean {
+    val extension = substringAfterLast('.', "").lowercase()
+    if (extension.isEmpty()) return false
+    return AudioImport.KNOWN.any { it == extension }
+}
 
 /**
  * Whether this name belongs to an export that has not finished writing.

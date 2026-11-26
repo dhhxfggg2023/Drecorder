@@ -101,6 +101,8 @@
     <string name="picker_empty">No selectable apps found</string>
     <string name="picker_loading">Reading the app list…</string>
     <string name="picker_note">Matching is by the app\'s main process uid. If an app plays through a separate process its audio may be missed — tick the other entries too, or switch to all-device media audio.</string>
+    <string name="picker_clear">Clear all</string>
+    <string name="picker_selected_count">%1$d apps selected</string>
     <string name="picker_load_error">Could not read the app list</string>
     <string name="settings_title">Settings</string>
     <string name="settings_format">Format</string>

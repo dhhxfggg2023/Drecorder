@@ -29,11 +29,28 @@ class PeakAssembly(
         require(bucketsPerSecond > 0) { "bucketsPerSecond must be positive" }
     }
 
-    private val capacity =
-        ((totalMs.coerceAtLeast(0L) * bucketsPerSecond) / 1_000L).toInt().coerceAtLeast(1)
-    private val mins = ShortArray(capacity)
-    private val maxs = ShortArray(capacity)
-    private val filled = BooleanArray(capacity)
+    /**
+     * How many buckets the file is expected to need.
+     *
+     * Only a first guess: a container that under-reports its duration would
+     * otherwise silently truncate the waveform. The arrays grow on demand.
+     */
+    private val expected = ((totalMs.coerceAtLeast(0L) * bucketsPerSecond) / 1_000L).toInt().coerceAtLeast(1)
+
+    /**
+     * The furthest bucket the waveform may ever reach.
+     *
+     * The declared duration, with a little slack for a container that
+     * under-reports it by a fraction of a second. Growth beyond this would let a
+     * mis-decoded segment invent audio past the end of the file, which is worse
+     * than leaving it out.
+     */
+    private val limit = expected + expected / 100 + bucketsPerSecond
+
+    private var capacity = expected
+    private var mins = ShortArray(expected)
+    private var maxs = ShortArray(expected)
+    private var filled = BooleanArray(expected)
 
     /** How many buckets of the whole waveform are known. */
     var count: Int = 0
@@ -65,7 +82,11 @@ class PeakAssembly(
             val timeMs = segment.bucketStartMs(index)
             if (timeMs < 0L) continue
             val target = ((timeMs * bucketsPerSecond) / 1_000L).toInt()
-            if (target < 0 || target >= capacity) continue
+            // A segment that starts beyond the recording is a decoding fault, not
+            // audio: it is dropped rather than allowed to stretch the waveform
+            // past the length of the file.
+            if (target < 0 || target >= limit) continue
+            if (target >= capacity) growTo(target + 1)
             val minV = segment.minAt(index)
             val maxV = segment.maxAt(index)
             if (!filled[target]) {
@@ -81,6 +102,16 @@ class PeakAssembly(
         return count
     }
 
+    /** Doubles the arrays until they can hold [needed] buckets. */
+    private fun growTo(needed: Int) {
+        var size = capacity
+        while (size < needed) size = size shl 1
+        mins = mins.copyOf(size)
+        maxs = maxs.copyOf(size)
+        filled = filled.copyOf(size)
+        capacity = size
+    }
+
     /**
      * The waveform of the whole recording, as far as it is known.
      *
@@ -88,13 +119,29 @@ class PeakAssembly(
      * only the part that has been decoded. The renderer draws nothing beyond
      * it — which is what the user should see while the rest is still being
      * decoded.
+     *
+     * **No copy.** [mins] and [maxs] are the assembly's own arrays, truncated to
+     * [count] only when that already is their length. Copying them here was the
+     * single most expensive thing in the decode of a long recording: a
+     * two-hour file is sixty segments, and each segment copied everything
+     * decoded so far — about 84 MB of copying and sixty arrays big enough to go
+     * straight into the large-object heap, which is what makes the waveform crawl
+     * in while the codec is already ahead (「解算卡」).
+     *
+     * The arrays only ever grow by doubling, and a grown array is written to
+     * behind the caller's back, so the snapshot returned to a caller is stable
+     * only until the next [add]. That is exactly how the caller uses it: every
+     * segment is handed straight to the UI, which copies what it needs.
      */
-    fun snapshot(): PeakData = PeakData(
-        sampleRate = sampleRate.coerceAtLeast(1),
-        channelCount = channelCount.coerceAtLeast(1),
-        bucketsPerSecond = bucketsPerSecond,
-        mins = mins.copyOf(count),
-        maxs = maxs.copyOf(count),
-        offsetMs = 0L,
-    )
+    fun snapshot(): PeakData {
+        val exact = count == mins.size && count == maxs.size
+        return PeakData(
+            sampleRate = sampleRate.coerceAtLeast(1),
+            channelCount = channelCount.coerceAtLeast(1),
+            bucketsPerSecond = bucketsPerSecond,
+            mins = if (exact) mins else mins.copyOf(count),
+            maxs = if (exact) maxs else maxs.copyOf(count),
+            offsetMs = 0L,
+        )
+    }
 }

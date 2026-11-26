@@ -3,6 +3,7 @@ package dev.drecorder.ui.settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -65,6 +66,7 @@ import dev.drecorder.ui.design.SectionCard
 import dev.drecorder.ui.design.SettingsSectionTitle
 import dev.drecorder.ui.design.TextActionButton
 import dev.drecorder.ui.home.AppPickerSheet
+import dev.drecorder.ui.home.SelectedAppChip
 import dev.drecorder.ui.previewColor
 import kotlinx.coroutines.launch
 
@@ -128,6 +130,12 @@ fun ScopeSettingsScreen(
     val repository = remember(context) { InstalledAppsRepository(context) }
     var pickerVisible by remember { mutableStateOf(false) }
     var pickerApps by remember { mutableStateOf(emptyList<LaunchableApp>()) }
+    // The apps behind the saved uids, so the page can name them. Resolved from
+    // whatever list has been loaded; an app that is no longer installed simply
+    // does not appear, which is honest — it will not be captured either.
+    val selectedApps: List<LaunchableApp> = remember(pickerApps, settings.appUids) {
+        pickerApps.filter { app -> app.uid in settings.appUids }
+    }
     var pickerLoading by remember { mutableStateOf(false) }
     var pickerError by remember { mutableStateOf<String?>(null) }
     val pickerLoadError = stringResource(R.string.picker_load_error)
@@ -192,6 +200,35 @@ fun ScopeSettingsScreen(
                     onClick = { pickerVisible = true },
                 )
             }
+            // The chosen apps, by icon and name, **on this page**.
+            //
+            // A bare count ("3 个应用") says a filter exists but not which apps
+            // are in it, so the only way to check the setting was to open the
+            // picker and hunt for the ticks. They belong where the setting is.
+            if (settings.appsOnly && selectedApps.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                // Wrapped, not scrolled sideways: a row that scrolls hides part
+                // of the answer behind an edge the user has no reason to suspect
+                // (「挤不下的就不要放在一行上面可以吗，明明可以纵向的」). Three apps
+                // looked like two because Chrome sat past the right edge.
+                FlowRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    for (app in selectedApps) {
+                        SelectedAppChip(
+                            app = app,
+                            onRemove = {
+                                val remaining = settings.appUids - app.uid
+                                onRangeChange(remaining.isNotEmpty(), remaining)
+                            },
+                        )
+                    }
+                }
+            }
             Spacer(Modifier.height(6.dp))
             HintText(stringResource(R.string.picker_note))
         }
@@ -202,6 +239,9 @@ fun ScopeSettingsScreen(
             apps = pickerApps,
             isLoading = pickerLoading,
             loadError = pickerError,
+            // Seeded from the saved filter so the sheet opens showing what is
+            // already chosen, and a tapped-off app is actually removed.
+            initialUids = settings.appUids,
             onRetry = { scope.launch { loadApps() } },
             onDismiss = { pickerVisible = false },
             onConfirm = { picked ->

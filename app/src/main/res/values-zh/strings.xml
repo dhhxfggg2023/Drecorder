@@ -101,6 +101,8 @@
     <string name="picker_empty">没有找到可选择的应用</string>
     <string name="picker_loading">正在读取应用列表…</string>
     <string name="picker_note">提示：只按应用主进程 uid 匹配。若某个应用的声音来自独立进程，可能录不到；此时请同时勾选其他条目，或改用「全设备媒体音频」。</string>
+    <string name="picker_clear">全部取消</string>
+    <string name="picker_selected_count">已选 %1$d 个应用</string>
     <string name="picker_load_error">读取应用列表失败</string>
     <string name="settings_title">设置</string>
     <string name="settings_format">格式</string>

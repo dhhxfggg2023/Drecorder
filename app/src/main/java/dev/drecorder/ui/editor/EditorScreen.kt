@@ -2,6 +2,7 @@ package dev.drecorder.ui.editor
 
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.widget.Toast
 import androidx.compose.animation.core.FloatExponentialDecaySpec
 import androidx.compose.animation.core.animateDecay
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -282,6 +284,7 @@ fun EditorScreen(
     suspend fun ensureWaveform(recording: Recording) {
         val key = recording.file.path
         if (waveforms[key]?.peaks != null || waveforms[key]?.loading == true) return
+        val startedAt = android.os.SystemClock.elapsedRealtime()
         waveforms = waveforms + (
             key to Waveform(
                 displayName = recording.displayName,
@@ -291,7 +294,36 @@ fun EditorScreen(
             )
 
         val cacheFile = PeaksCache.fileFor(recording.file, context.filesDir)
-        val cached = withContext(Dispatchers.IO) { PeaksCache.read(cacheFile, recording.file) }
+        val cached = withContext(Dispatchers.IO) {
+            val read = PeaksCache.read(cacheFile, recording.file)
+            // A cache that reads cleanly but is mostly a flat line is not a
+            // quiet recording: it is the damage earlier bucketing left behind, and
+            // drawing it shows gaps where the audio has sound
+            // (「每次开启 app 都要自己核对缓存对不对，不对就清除重建」). Rebuilt here
+            // rather than trusted, because only a decoder can tell the two apart.
+            if (read != null && PeaksCache.silentFraction(read)) {
+                Log.w(
+                    "DrecorderWaveform",
+                    "cache mostly silent, rebuilding: " + recording.file.name,
+                )
+                runCatching { cacheFile.delete() }
+                null
+            } else {
+                read
+            }
+        }
+        // Says which of the four ways a cache can miss happened — no file, a
+        // version mismatch, a size mismatch or an mtime mismatch — and how long
+        // the lookup took either way. Without this the editor silently decodes
+        // whole recordings and there is no way to find out why: a release build
+        // cannot be inspected with adb and has no debugger.
+        Log.i(
+            "DrecorderWaveform",
+            "open " + recording.file.name +
+                " cache=" + (cached != null) +
+                " in " + (android.os.SystemClock.elapsedRealtime() - startedAt) + "ms" +
+                (if (cached == null) " because " + PeaksCache.diagnoseMiss(cacheFile, recording.file) else ""),
+        )
         if (cached != null) {
             waveforms = waveforms + (
                 key to Waveform(
@@ -323,6 +355,11 @@ fun EditorScreen(
             )
         }
 
+        Log.i(
+            "DrecorderWaveform",
+            "decoded " + recording.file.name + " in " +
+                (android.os.SystemClock.elapsedRealtime() - startedAt) + "ms",
+        )
         waveforms = when (decoded) {
             is PeakDecoder.Result.Success -> {
                 withContext(Dispatchers.IO) {
@@ -400,7 +437,12 @@ fun EditorScreen(
      * pixel, which is what keeps the shape the same at every zoom.
      */
     val detailBuckets = PeakLod.bucketsPerSecondFor(viewportSpanMs, waveformWidthPx)
-    val wantsDetail = viewportSpanMs > 0L && detailBuckets > PeakLod.COARSE
+    // Only when the cache is *materially* short of what the screen could show.
+    // Asking for "any more than the cache" would start a window decode for a
+    // picture a tenth finer than the one already on screen — a seek, a codec
+    // start and a cache write for something nobody can see.
+    val wantsDetail = viewportSpanMs > 0L &&
+        PeakLod.needsFinerWaveform(viewportSpanMs, waveformWidthPx, PeakLod.COARSE)
 
     /**
      * The page the detail is decoded for, in track time.
@@ -956,6 +998,8 @@ fun EditorScreen(
         }
     }
 
+
+
     // --- the screen ------------------------------------------------------------
 
     val picked = pickedSegment
@@ -1052,8 +1096,9 @@ fun EditorScreen(
                 }
             }
 
-            // The waveform takes whatever height is left. This is the thing the
-            // user works on, so it gets the space, not the toolbar.
+            // The timeline takes whatever height is left. This is the thing the
+            // user works on, so it gets the space, not the toolbar — and **all**
+            // of it is touchable, not only the band the picture occupies.
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1070,7 +1115,6 @@ fun EditorScreen(
                 } else {
                     WaveformView(
                         peaks = peaks,
-                        durationMs = totalMs,
                         spanMs = viewportSpanMs,
                         // The width is what decides how fine the waveform can
                         // be: at a fixed 100 buckets a second, the same 10 ms of
@@ -1080,7 +1124,6 @@ fun EditorScreen(
                         // A getter, not the value: this is what keeps the page
                         // from recomposing on every frame of playback.
                         playhead = { playheadMs },
-                        removed = emptyList(),
                         markers = cutPoints,
                         onTimelineDrag = { delta -> panBy(delta) },
                         onMarkerSelect = { ms ->
@@ -1118,78 +1161,87 @@ fun EditorScreen(
                                 previewPlayer.seekTo(playheadMs)
                             }
                         },
-                        modifier = Modifier.fillMaxWidth(),
-                        // The waveform is one band on the page, not the page.
-                        // Filling every pixel of height made the bars a wall
-                        // (「波形不要整个界面都挤满了」, 2026-10-23).
-                        height = WAVEFORM_HEIGHT,
+                        // Fills the whole area between the merge strip and the
+                        // transport bar: that is the **touch area**, so a pinch or
+                        // a drag works anywhere on the timeline and not only on
+                        // the 264 dp strip the picture occupies (「我想用上下更大
+                        // 的区域缩放」). The picture itself stays one band on the
+                        // page, not the page: filling every pixel made the bars a
+                        // wall (「波形不要整个界面都挤满了」, 2026-10-23).
+                        modifier = Modifier.fillMaxSize(),
+                        bandHeight = WAVEFORM_HEIGHT,
                         selectedRange = picked,
                     )
                 }
-            }
 
-            if (exporting) {
-                LinearProgressIndicator(
-                    progress = { exportProgress / 100f },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-
-            notice?.let { message ->
-                Text(
-                    text = message,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
-                )
-            }
-
-            // What can be done to the picked stretch — above the transport, so
-            // the thumb travels between them and nothing moves under it.
-            if (pickedCutMs != null) {
-                Row(
+                // Everything below floats *over* the timeline instead of
+                // taking height from it. A row that appears and disappears —
+                // a notice, the actions for a picked stretch, the export bar —
+                // used to shrink the timeline's `weight(1f)` box, and because
+                // the waveform band is centred in that box, the picture jumped
+                // up and down whenever a message showed up. The blank space
+                // around the band is large; spending some of it on a floating
+                // row costs nothing and leaves the picture exactly where it was.
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                        .fillMaxHeight(),
+                    contentAlignment = Alignment.BottomCenter,
                 ) {
-                    Text(
-                        // A cut that cannot be removed says so instead of the
-                        // button announcing a deletion that never happened:
-                        // "切点删除失败" was the screen lying about work it had
-                        // not done (m00376).
-                        if (cutJoinable) {
-                            stringResource(R.string.editor_marker_picked, formatDuration(pickedCutMs!!))
-                        } else {
-                            stringResource(R.string.editor_marker_not_joinable)
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(
-                        enabled = cutJoinable,
-                        onClick = {
-                            val at = pickedCutMs
-                            pickedCutMs = null
-                            if (at != null) {
-                                afterEdit(EditTrack.removeCutAt(clips, at))
-                                notice = resources.getString(R.string.editor_marker_deleted)
-                            }
-                        },
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        Text(stringResource(R.string.editor_marker_delete, formatDuration(pickedCutMs!!)))
+                        if (exporting) {
+                            LinearProgressIndicator(
+                                progress = { exportProgress / 100f },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+
+                        notice?.let { message ->
+                            Text(
+                                text = message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.secondary,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                            )
+                        }
+
+                        // What can be done to the picked stretch, floating at
+                        // the bottom of the timeline: the thumb travels between
+                        // it and the transport, and nothing moves under it.
+                        if (pickedCutMs != null || picked != null) {
+                            Box(Modifier.padding(horizontal = 16.dp)) {
+                                if (pickedCutMs != null) {
+                                    CutActionsRow(
+                                        cutMs = pickedCutMs!!,
+                                        joinable = cutJoinable,
+                                        onDelete = {
+                                            val at = pickedCutMs
+                                            pickedCutMs = null
+                                            if (at != null) {
+                                                afterEdit(EditTrack.removeCutAt(clips, at))
+                                                notice = resources.getString(R.string.editor_marker_deleted)
+                                            }
+                                        },
+                                    )
+                                } else {
+                                    val segment = picked ?: return@Box
+                                    SegmentActionsRow(
+                                        segment = segment,
+                                        enabled = pickedHasAudio,
+                                        repeatEnabled = true,
+                                        onDelete = { pendingEdit = PendingEdit.DeleteSegment(segment) },
+                                        onKeepOnly = { pendingEdit = PendingEdit.KeepOnly(segment) },
+                                        onRepeat = { pendingEdit = PendingEdit.Repeat(segment) },
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(Modifier.height(8.dp))
                     }
-                }
-            } else if (picked != null) {
-                Box(Modifier.padding(horizontal = 16.dp)) {
-                    SegmentActionsRow(
-                        segment = picked,
-                        enabled = pickedHasAudio,
-                        repeatEnabled = true,
-                        onDelete = { pendingEdit = PendingEdit.DeleteSegment(picked) },
-                        onKeepOnly = { pendingEdit = PendingEdit.KeepOnly(picked) },
-                        onRepeat = { pendingEdit = PendingEdit.Repeat(picked) },
-                    )
                 }
             }
 
@@ -1704,3 +1756,39 @@ private const val PREVIEW_STALL_MS = 8_000L
  * 2026-10-23) and short enough to leave the page looking like a page.
  */
 private val WAVEFORM_HEIGHT = 264.dp
+
+/**
+ * What can be done to the cut point the user picked.
+ *
+ * A composable of its own because it floats inside the timeline now, and the
+ * timeline's overlay column has to be able to call it without dragging the whole
+ * branch into that lambda.
+ *
+ * A cut that cannot be removed says so instead of the button announcing a
+ * deletion that never happened: "切点删除失败" was the screen lying about work it
+ * had not done (m00376).
+ */
+@Composable
+private fun CutActionsRow(
+    cutMs: Long,
+    joinable: Boolean,
+    onDelete: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = if (joinable) {
+                stringResource(R.string.editor_marker_picked, formatDuration(cutMs))
+            } else {
+                stringResource(R.string.editor_marker_not_joinable)
+            },
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(enabled = joinable, onClick = onDelete) {
+            Text(stringResource(R.string.editor_marker_delete, formatDuration(cutMs)))
+        }
+    }
+}

@@ -88,7 +88,15 @@ object WaveformPrecompute {
         )
         val needing = withContext(Dispatchers.IO) {
             library.recordings().map { it.file }.filter { file ->
-                PeaksCache.read(PeaksCache.fileFor(file, app.filesDir), file) == null
+                val cacheFile = PeaksCache.fileFor(file, app.filesDir)
+                val cached = PeaksCache.read(cacheFile, file)
+                    ?: return@filter true
+                // A cache whose waveform is mostly a flat line is the damage the
+                // old window-offset bucketing left on every long recording. It
+                // reads cleanly, so the only way to notice is to look at what it
+                // contains — and rebuilding it is what makes the gaps go away
+                // without the user clearing app storage by hand.
+                PeaksCache.silentFraction(cached)
             }
         }
         if (needing.isEmpty()) return

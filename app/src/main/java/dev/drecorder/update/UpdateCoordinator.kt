@@ -41,6 +41,19 @@ class UpdateCoordinator(
 
     private var manifest: UpdateManifest? = null
 
+    /**
+     * Clears the installers left by earlier versions, once per process.
+     *
+     * The update folder lives in this app's external storage, so the system shows
+     * it as this app's data. Users who updated through many versions already have
+     * a growing pile of obsolete installers there and should not have to start a
+     * download for the space to come back — this runs before anything else the
+     * coordinator does.
+     */
+    fun sweepLeftovers() {
+        scope.launch(Dispatchers.IO) { runCatching { installer.sweepLeftovers() } }
+    }
+
     fun consumeNotice() {
         _notice.value = null
     }
@@ -133,8 +146,9 @@ class UpdateCoordinator(
                         VerificationResult.Ok -> file
                         is VerificationResult.Failed -> {
                             // A file that fails verification must not survive: leaving it
-                            // on disk invites a later "install anyway" tap.
-                            runCatching { file.delete() }
+                            // on disk invites a later "install anyway" tap. The storage
+                            // owner does the deleting so the folder has one owner, not two.
+                            installer.discard(file)
                             lastFailure = verification
                             error(verification.reason)
                         }

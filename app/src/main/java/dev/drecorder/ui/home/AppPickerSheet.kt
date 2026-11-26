@@ -6,6 +6,8 @@ import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,10 +20,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -70,12 +74,22 @@ fun AppPickerSheet(
     apps: List<LaunchableApp>,
     isLoading: Boolean,
     loadError: String?,
+    /**
+     * The uids that are already chosen.
+     *
+     * Passed in and seeded into the sheet, because the sheet used to open with an
+     * empty selection every time: tapping "choose apps" on a recording that
+     * already had a filter showed nothing ticked, so there was no way to see what
+     * was selected and no way to take one off
+     * (「看不到选了什么，也没法去掉我选的」).
+     */
+    initialUids: List<Int> = emptyList(),
     onRetry: () -> Unit,
     onDismiss: () -> Unit,
     onConfirm: (AppSelection) -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState()
-    var selected by remember { mutableStateOf(emptySet<Int>()) }
+    var selected by remember(initialUids) { mutableStateOf(initialUids.toSet()) }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(modifier = Modifier.fillMaxWidth()) {
@@ -91,9 +105,19 @@ fun AppPickerSheet(
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f),
                 )
+                if (selected.isNotEmpty()) {
+                    TextActionButton(
+                        text = stringResource(R.string.picker_clear),
+                        onClick = { selected = emptySet() },
+                    )
+                }
                 TonalActionButton(
                     text = stringResource(R.string.picker_confirm),
-                    enabled = selected.isNotEmpty(),
+                    // Confirming with nothing ticked is a real choice: it means
+                    // "capture every app", which is what the caller falls back
+                    // to. Disabling the button made clearing the filter
+                    // impossible, so a picked app could never be un-picked.
+                    enabled = true,
                     onClick = { onConfirm(AppSelection(selected.toList())) },
                 )
             }
@@ -156,6 +180,58 @@ fun AppPickerSheet(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
+            )
+        }
+    }
+}
+
+/**
+ * One chosen app, as an icon and a name that can be tapped off.
+ *
+ * Tapping removes it: a filter set in a settings screen an hour ago is easy to
+ * forget, and having to find the row in the list to un-tick it was the other half
+ * of why the selection was unusable.
+ */
+@Composable
+fun SelectedAppChip(app: LaunchableApp, onRemove: () -> Unit) {
+    val context = LocalContext.current
+    val icon: ImageBitmap? = remember(app.packageName) {
+        runCatching {
+            context.packageManager.getApplicationIcon(app.packageName).toImageBitmap()
+        }.getOrNull()
+    }
+    val painter = remember(icon) { icon?.let { BitmapPainter(it) } }
+    val scheme = MaterialTheme.colorScheme
+
+    Surface(
+        color = scheme.primaryContainer,
+        shape = RoundedCornerShape(percent = 50),
+        modifier = Modifier.clickable(onClick = onRemove),
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 6.dp, end = 12.dp, top = 5.dp, bottom = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (painter != null) {
+                Image(
+                    painter = painter,
+                    contentDescription = null,
+                    modifier = Modifier.size(26.dp),
+                )
+            }
+            Text(
+                text = app.label,
+                style = MaterialTheme.typography.labelLarge,
+                color = scheme.onPrimaryContainer,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Icon(
+                imageVector = Icons.Filled.Close,
+                contentDescription = stringResource(R.string.picker_clear),
+                tint = scheme.onPrimaryContainer,
+                modifier = Modifier.size(16.dp),
             )
         }
     }

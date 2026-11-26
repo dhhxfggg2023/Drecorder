@@ -29,7 +29,19 @@ object PeaksCache {
      * re-decoded from scratch (「加载从左到右，不要取间隔加载」, 2026-11-04 — the
      * wholesale version bump made every old recording crawl back in).
      */
-    private const val VERSION = 2
+    /**
+     * Version 3 retires every overview cache written before the window-offset fix.
+     *
+     * The bug it retires was not in the cache: it was in the bucketing that wrote
+     * it. A long recording was decoded in two-minute segments, and each segment
+     * was indexed by the file's own frame number while claiming to start at the
+     * window — so every second segment landed at twice its position, on top of a
+     * later one, and the stretch it belonged to stayed flat. Caches written by
+     * that code hold the damage, and no reader can tell a legitimately quiet
+     * stretch from a lost one, so the version byte is what makes them rebuild
+     * (「每次开启 app 都要自己核对缓存对不对，不对就清除重建」).
+     */
+    private const val VERSION = 3
 
     /**
      * The **window** cache version is separate, because that is where the
@@ -199,6 +211,37 @@ object PeaksCache {
     /** Reads a whole-recording overview cache. */
     fun read(file: File, source: File): PeakFile? = readVersioned(file, source, VERSION)
 
+    /**
+     * Whether [file] describes [source] well enough to draw from it.
+     *
+     * Null when the cache is good; a short reason when it is not, so a caller can
+     * say which of the ways it failed rather than "the waveform is wrong".
+     */
+    fun validate(file: File, source: File): String? = diagnoseMiss(file, source, VERSION)
+
+    /**
+     * How much of [file]'s waveform is a flat line.
+     *
+     * A waveform of a recording that was bucketed correctly is almost never
+     * mostly zero: even a silent room has a noise floor, and this app captures
+     * playback rather than a muted microphone. A cache that is more than [limit]
+     * silent is treated as damaged and rebuilt, because the alternative — drawing
+     * it — shows the user a recording with gaps that are not in the audio.
+     *
+     * The threshold is deliberately generous: a real recording can be mostly
+     * quiet, and re-decoding a long file is expensive enough that the check has
+     * to be about *broken*, not about *quiet*.
+     */
+    fun silentFraction(cached: PeakFile, limit: Float = 0.55f): Boolean {
+        val data = cached.data
+        if (data.bucketCount == 0) return true
+        var silent = 0
+        for (index in 0 until data.bucketCount) {
+            if (data.peakAt(index) == 0) silent++
+        }
+        return silent.toFloat() / data.bucketCount > limit
+    }
+
     /** Reads a window cache, accepting only the window bucketing's version. */
     fun readWindow(file: File, source: File): PeakFile? = readVersioned(file, source, WINDOW_VERSION)
 
@@ -252,6 +295,39 @@ object PeaksCache {
         } catch (_: IllegalArgumentException) {
             // A truncated file can make readShort throw; treat it as a miss.
             null
+        }
+    }
+
+    /**
+     * A one-line account of why a cache does or does not describe [source].
+     *
+     * Read-only and cheap: it opens nothing that [readVersioned] will not open
+     * anyway. Returns null when the cache is usable, so a hit logs nothing.
+     */
+    fun diagnoseMiss(file: File, source: File, expectedVersion: Int = VERSION): String? {
+        if (!file.isFile) return "no cache file (" + file.name + ")"
+        return try {
+            DataInputStream(file.inputStream().buffered()).use { input ->
+                if (input.readInt() != MAGIC) return "bad magic"
+                val version = input.readInt()
+                input.readInt()
+                input.readInt()
+                input.readInt()
+                input.readInt()
+                input.readLong()
+                val sourceSize = input.readLong()
+                val sourceModified = input.readLong()
+                if (version != expectedVersion) return "version " + version + " != " + expectedVersion
+                if (sourceSize != source.length()) {
+                    return "size " + sourceSize + " != " + source.length()
+                }
+                if (sourceModified != source.lastModified()) {
+                    return "mtime " + sourceModified + " != " + source.lastModified()
+                }
+                null
+            }
+        } catch (error: Exception) {
+            "unreadable: " + error.javaClass.simpleName
         }
     }
 }

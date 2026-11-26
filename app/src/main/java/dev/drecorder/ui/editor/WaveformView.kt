@@ -23,6 +23,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
@@ -37,13 +38,14 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.drecorder.audio.edit.ColumnPageCache
 import dev.drecorder.audio.edit.EditFollow
 import dev.drecorder.audio.edit.EditMarkers
 import dev.drecorder.audio.edit.EditSegment
-import dev.drecorder.audio.edit.KeepRange
 import dev.drecorder.audio.edit.PeakData
 import dev.drecorder.audio.edit.WaveformBins
 import dev.drecorder.audio.edit.WaveformColumns
+import dev.drecorder.audio.edit.WaveformGain
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -85,14 +87,12 @@ import kotlin.math.roundToLong
 @Composable
 fun WaveformView(
     peaks: PeakData,
-    durationMs: Long,
     spanMs: Long,
     // Read as a function, never as a value: the playhead changes every frame
     // while the player runs, and reading it in composition would recompose the
     // whole editor page (「波形移动的帧率太低，看起来卡卡的」, 2026-10-23). The
     // draw block reads it instead, which costs a redraw.
     playhead: () -> Long,
-    removed: List<KeepRange>,
     markers: List<Long>,
     onTimelineDrag: (windowDeltaMs: Long) -> Unit,
     onMarkerSelect: (ms: Long) -> Unit = {},
@@ -104,10 +104,17 @@ fun WaveformView(
     /** The width the waveform got, so the editor can ask for the detail it needs. */
     onWidthPxChanged: (widthPx: Int) -> Unit = {},
     modifier: Modifier = Modifier,
-    /** A fixed height, or null to take whatever height the parent offers. */
-    height: Dp? = 200.dp,
+    /**
+     * The height of the drawn waveform band, or null to fill the whole area.
+     *
+     * Only the picture is this tall. The **touch area** is the whole composable,
+     * which is why the two are separate: a finger returning to the timeline aims
+     * at the sound, not at a 264 dp strip, and a pinch that only works inside that
+     * strip is a pinch the user cannot find (「我想用上下更大的区域缩放」). The band
+     * stays vertically centred in whatever space it is given.
+     */
+    bandHeight: Dp? = 200.dp,
     waveColor: Color = Color(0xFF3D7EFF),
-    removedColor: Color = Color(0xFF9AA0A6),
     rulerColor: Color = Color(0x66000000),
     markerColor: Color = Color(0xFFFFA000),
     playheadColor: Color = Color(0xFFE53935),
@@ -154,9 +161,11 @@ fun WaveformView(
     val rulerLabels = remember { mutableMapOf<Long, TextLayoutResult>() }
 
     Box(
+        // Fills the space the editor gives it: this is the touch area, and it is
+        // deliberately much taller than the picture drawn inside it.
         modifier = modifier
             .fillMaxWidth()
-            .then(if (height != null) Modifier.height(height) else Modifier.fillMaxHeight())
+            .fillMaxHeight()
             .onSizeChanged {
                 widthPx = it.width
                 onWidthPxChanged(it.width)
@@ -296,17 +305,23 @@ fun WaveformView(
                 }
             },
     ) {
-        // What one drawn column covers, and the columns themselves.
+        // How much audio one drawn column covers.
         //
-        // Both depend on the data, the span and the width — never on the playhead
-        // — so they are decided here, in composition. The columns are then reused
-        // between frames: the draw block runs on every playhead tick, and
-        // rebinning the whole span sixty times a second is what made a long
-        // recording stutter while it played.
+        // It depends on the data, the span and the width — never on the playhead
+        // — so it is decided here, in composition, and a scroll inside one
+        // column changes nothing.
         val columnMs = remember(peaks, spanMs, widthPx) {
             WaveformBins.stepMs(peaks, spanMs, widthPx)
         }
-        val bars = remember { BarCache() }
+        // How much the waveform is magnified so a quiet recording fills the band
+        // instead of being a ribbon in an empty one (「波形太小了」). Decided from
+        // the whole recording, not the window, so the picture does not change
+        // scale as it scrolls.
+        val gain = remember(peaks) { WaveformGain.gainFor(peaks) }
+        // The reduced columns, kept between frames and reduced a page at a time
+        // (see [ColumnPage]): the reduction is the expensive half of drawing,
+        // and the draw block runs on every playhead tick.
+        val pages = remember { ColumnPageCache() }
 
         Canvas(modifier = Modifier.fillMaxWidth().fillMaxHeight()) {
             if (widthPx <= 0) return@Canvas
@@ -324,19 +339,37 @@ fun WaveformView(
             // the part coming in on the right, and a margin so the rounding of
             // the pixel width never leaves a gap at the end.
             val barCount = ((spanMs / columnMs).toInt() + 3).coerceAtLeast(1)
-            val columns = bars.columnsFor(peaks, alignedStartMs, columnMs, barCount)
+            val columns = pages.columnsFor(peaks, alignedStartMs, columnMs, barCount)
             // Where those columns land on screen — a column is [stepPx] wide, not
             // necessarily one pixel.
-            val stepPx = if (spanMs > 0L) {
-                widthPx.toFloat() * columnMs.toFloat() / spanMs.toFloat()
-            } else {
-                widthPx.toFloat()
-            }
+            //
+            // Never narrower than one stick: below that the sticks would draw
+            // over each other, and the row would be pressed together while the
+            // shift below kept the unscaled width, sliding the picture away from
+            // the audio it belongs to. Clamped here, once, so the drawing and the
+            // shift cannot disagree.
+            val stepPx = (
+                if (spanMs > 0L) {
+                    widthPx.toFloat() * columnMs.toFloat() / spanMs.toFloat()
+                } else {
+                    widthPx.toFloat()
+                }
+                ).coerceAtLeast(STICK_WIDTH_PX)
             // How far the window has scrolled into the first column, in pixels.
             val shiftPx = (startMs - alignedStartMs).toFloat() / columnMs.toFloat() * stepPx
+            // The picture occupies a band of [bandHeight], centred in the touch
+            // area. Everything below is expressed in the band's own coordinates,
+            // so the drawing code never has to know how tall the touch area is —
+            // and the gestures never have to know how tall the picture is.
             val rulerHeight = 20.dp.toPx()
-            val waveTop = rulerHeight
-            val waveBottom = size.height
+            val band = if (bandHeight != null) {
+                bandHeight.toPx().coerceAtMost(size.height)
+            } else {
+                size.height
+            }
+            val bandTop = (size.height - band) / 2f
+            val waveTop = bandTop + rulerHeight
+            val waveBottom = bandTop + band
             val midY = (waveTop + waveBottom) / 2f
             val halfHeight = (waveBottom - waveTop) / 2f - 4.dp.toPx()
 
@@ -369,44 +402,25 @@ fun WaveformView(
                 }
             }
 
-            // --- removed stretches: greyed out, struck through, left in place ---
-            for (range in removed) {
-                val left = msToX(range.startMs, size.width, startMs, spanMs)
-                val right = msToX(range.endMs, size.width, startMs, spanMs)
-                if (right < 0f || left > size.width) continue
-                val clippedLeft = max(0f, left)
-                val clippedRight = min(size.width, right)
-                drawRect(
-                    color = Color(0x14000000),
-                    topLeft = Offset(clippedLeft, waveTop),
-                    size = Size(clippedRight - clippedLeft, waveBottom - waveTop),
-                )
-                // The strike-through is what makes "this is gone" readable at
-                // a glance, the way every ordinary recorder draws a cut.
-                val strike = Path().apply {
-                    moveTo(clippedLeft, waveTop)
-                    lineTo(clippedRight, waveBottom)
-                }
-                drawPath(
-                    strike,
-                    color = removedColor.copy(alpha = 0.45f),
-                    style = Stroke(width = 1.dp.toPx()),
-                )
-            }
+            // There is no "removed stretch" overlay any more: the editor's track
+            // is a list of clips (EditTrack), so a deleted stretch is not
+            // in the track at all and its greyed-out, struck-through ghost below
+            // was drawn from a list the screen always passed empty. Drawing a
+            // feature from a caller that can never supply it is worse than
+            // missing: it reads as working code.
 
-            // --- the waveform itself: one continuous envelope ---
+            // --- the waveform itself: thin sticks, one per column ---
             //
-            // Drawn as a single filled outline rather than a row of separate
-            // capsules: the user asked for a continuous waveform, not a fence
-            // (「波形要连续，不要离散图像」, 2026-10-23). Per column the outline
-            // goes to the loudest and the quietest sample of that column, which
-            // is what a waveform is — the shape of the audio, not a decoration.
+            // The user asked for this shape twice: not a discrete row of
+            // capsules (2026-10-23), and not a filled blob either
+            // (「细火柴棍就行」, 2026-11-04).
             drawEnvelope(
                 columns = columns,
                 shiftPx = shiftPx,
                 stepPx = stepPx,
                 midY = midY,
                 halfHeight = halfHeight,
+                gain = gain,
                 color = waveColor,
             )
 
@@ -431,7 +445,7 @@ fun WaveformView(
                 val x = size.width / 2f
                 drawLine(
                     color = playheadColor,
-                    start = Offset(x, 0f),
+                    start = Offset(x, bandTop),
                     end = Offset(x, waveBottom),
                     strokeWidth = 2.dp.toPx(),
                 )
@@ -440,7 +454,7 @@ fun WaveformView(
                 drawCircle(
                     color = playheadColor,
                     radius = 7.dp.toPx(),
-                    center = Offset(x, 9.dp.toPx()),
+                    center = Offset(x, bandTop + 9.dp.toPx()),
                 )
             }
 
@@ -452,6 +466,7 @@ fun WaveformView(
                 startMs = startMs,
                 spanMs = spanMs,
                 rulerHeight = rulerHeight,
+                rulerTop = bandTop,
                 rulerColor = rulerColor,
             )
         }
@@ -490,6 +505,14 @@ private const val FLING_MIN_SPEED_PX_PER_S = 120f
  * content of the column, and a silent stretch reads as a thin line on the
  * centre instead of a filled slab claiming there is sound.
  *
+ * The sticks are drawn as **one path of vertical segments** rather than as one
+ * `drawLine` per column. At two-pixel columns a phone-wide waveform is five
+ * hundred sticks, six hundred times a minute while the picture plays: each
+ * `drawLine` is a draw call across the JNI boundary, and five hundred of them
+ * per frame is the difference between a waveform that glides and one that
+ * stutters (「波形移动的帧率太低，看起来卡卡的」, 2026-10-23). One path is one
+ * call however many sticks it holds.
+ *
  * Pure drawing: the column data and the shift are computed by the caller.
  */
 private fun DrawScope.drawEnvelope(
@@ -498,30 +521,102 @@ private fun DrawScope.drawEnvelope(
     stepPx: Float,
     midY: Float,
     halfHeight: Float,
+    /** How much to magnify; see [WaveformGain]. */
+    gain: Float,
     color: Color,
 ) {
     if (columns.count == 0) return
 
+    val step = stepPx.coerceAtLeast(STICK_WIDTH_PX)
+    var drawn = false
+    // Two passes over the same columns: the peak span in the quiet colour, then
+    // the mean amplitude in the loud one. The peak alone is a hairy wall — every
+    // column reaches as high as its loudest sample, so speech and noise look the
+    // same — while the mean is the loudness contour, which is what the eye reads
+    // as "someone is talking here". Drawing the mean *inside* the peak keeps
+    // both facts visible at once instead of choosing between them.
+    val body = Path()
+    val core = Path()
+
     for (index in 0 until columns.count) {
         // A column with no decoded audio draws nothing: past the end of the
         // recording there is nothing to claim.
-        if (columns.mins[index] == Int.MAX_VALUE) continue
-        val x = index * stepPx - shiftPx
+        if (columns.isEmpty(index)) continue
+        val x = index * step - shiftPx
         if (x < -STICK_WIDTH_PX || x > size.width + STICK_WIDTH_PX) continue
-        val low = (columns.mins[index] / 32768f).coerceIn(-1f, 1f) * halfHeight
-        val high = (columns.maxs[index] / 32768f).coerceIn(-1f, 1f) * halfHeight
-        drawLine(
-            color = color,
-            start = Offset(x, midY + low),
-            end = Offset(x, midY + high),
-            strokeWidth = STICK_WIDTH_PX,
-            cap = StrokeCap.Round,
+        // Screen y grows downwards, so the loudest sample is drawn *above* the
+        // centre and the quietest *below* it: subtracting, not adding. Adding
+        // flips the waveform upside down, which is invisible on symmetric test
+        // audio and wrong on every real recording.
+        val above = (columns.maxAt(index) / 32768f * gain).coerceIn(-1f, 1f) * halfHeight
+        val below = (columns.minAt(index) / 32768f * gain).coerceIn(-1f, 1f) * halfHeight
+        // Zero-length segments are what a silent stretch looks like, and a
+        // moveTo/lineTo pair of the same point would draw nothing at all — the
+        // centre line has to be *there* to say "this is silence", not missing.
+        val top = midY - above
+        val bottom = midY - below
+        body.moveTo(x, top)
+        body.lineTo(x, if (bottom - top < MIN_STICK_PX) top + MIN_STICK_PX else bottom)
+
+        // The mean, mirrored the same way. Never taller than the peak span it
+        // sits inside, and never shorter than a dot: a quiet column still has to
+        // show that there is audio there.
+        val level = (columns.meanAt(index) / 32768f * gain).coerceIn(0f, 1f) * halfHeight
+        val coreTop = midY - level
+        val coreBottom = midY + level
+        core.moveTo(x, coreTop)
+        core.lineTo(
+            x,
+            if (coreBottom - coreTop < MIN_STICK_PX) coreTop + MIN_STICK_PX else coreBottom,
         )
+        drawn = true
     }
+    if (!drawn) return
+    // The peak first, thin and dim, so the core reads as light in front of it.
+    drawPath(
+        path = body,
+        color = color.copy(alpha = PEAK_ALPHA),
+        style = Stroke(width = STICK_WIDTH_PX, cap = StrokeCap.Round),
+    )
+    drawPath(
+        path = core,
+        color = lerp(color, Color.White, CORE_WHITE_MIX),
+        style = Stroke(width = STICK_WIDTH_PX, cap = StrokeCap.Round),
+    )
 }
 
 /** How wide one matchstick is drawn, in pixels. */
 private const val STICK_WIDTH_PX = 2f
+
+/**
+ * How opaque the peak span is, relative to the mean core.
+ *
+ * The peak reaches the loudest sample of the column, which for speech is nearly
+ * always near full scale — opaque, every column would be a tall solid stick and
+ * the picture a solid block. Held back to a third, it reads as the reach of the
+ * sound while the core carries the shape.
+ */
+private const val PEAK_ALPHA = 0.34f
+
+/**
+ * How far the mean core is lightened towards white.
+ *
+ * The core is the same width as the peak stick — a *wider* core was rejected:
+ * at four pixels the neighbouring cores touch and the picture collapses back
+ * into the continuous filled body the user turned down (「波形不要边缘连续」).
+ * Colour is what separates the loudness contour from the reach of the sound,
+ * and the matchstick shape survives untouched.
+ */
+private const val CORE_WHITE_MIX = 0.45f
+
+/**
+ * The shortest a stick is ever drawn, in pixels.
+ *
+ * Silence is not nothing: a quiet stretch has to read as a line on the centre,
+ * the way every recorder draws it, or the waveform looks like it has holes in
+ * it. A round cap two pixels wide needs about this much length to show.
+ */
+private const val MIN_STICK_PX = 1.5f
 
 /**
  * The marker within reach of a touch, or null.
@@ -588,14 +683,7 @@ private fun DrawScope.drawMarker(
     drawPath(path, color = color)
 }
 
-/**
- * Re-bins the cached peaks into one min/max pair per screen column.
- *
- * The cached peaks are fixed at 100 buckets per second; when the user zooms in
- * past that, several buckets share a column and the column shows the extremes
- * of all of them. Zooming out merges many buckets and the column shows their
- * extremes too, which is exactly what a waveform should do.
- */
+/** The moment under [x], for a tap that says where to listen from. */
 private fun timeAt(x: Float, widthPx: Int, startMs: Long, spanMs: Long): Long {
     if (widthPx <= 0) return startMs
     val fraction = (x / widthPx.toFloat()).coerceIn(0f, 1f)
@@ -614,6 +702,8 @@ private fun DrawScope.drawRuler(
     startMs: Long,
     spanMs: Long,
     rulerHeight: Float,
+    /** Where the band starts, so the ruler sits on top of it wherever it is. */
+    rulerTop: Float,
     rulerColor: Color,
 ) {
     val spacing = chooseTickSpacing(spanMs, width)
@@ -624,8 +714,8 @@ private fun DrawScope.drawRuler(
             val x = msToX(tick, width, startMs, spanMs)
             drawLine(
                 color = rulerColor,
-                start = Offset(x, 0f),
-                end = Offset(x, rulerHeight),
+                start = Offset(x, rulerTop),
+                end = Offset(x, rulerTop + rulerHeight),
                 strokeWidth = 1f,
             )
             // Measured once per label value, not once per frame: text layout is
@@ -637,7 +727,7 @@ private fun DrawScope.drawRuler(
             val layout = labels.getOrPut(tick) {
                 textMeasurer.measure(formatClock(tick), style)
             }
-            drawText(layout, topLeft = Offset(x + 2f, 1f))
+            drawText(layout, topLeft = Offset(x + 2f, rulerTop + 1f))
         }
         tick += spacing
     }
@@ -667,39 +757,4 @@ internal fun formatClock(ms: Long): String {
 /** How many laid-out ruler labels are kept before the cache is thrown away. */
 private const val MAX_RULER_LABELS = 512
 
-/**
- * Keeps the built columns between frames.
- *
- * The waveform is rebuilt inside the draw lambda, which runs once per playhead
- * tick. While the user is listening or simply looking, the data, the width and
- * the column grid do not change — only the pixel shift does — so the same
- * columns are built again and again. This holds the last set and hands it back
- * when nothing that shapes it has moved.
- */
-private class BarCache {
 
-    private var peaks: PeakData? = null
-    private var startMs: Long = Long.MIN_VALUE
-    private var columnMs: Long = -1L
-    private var count: Int = -1
-    private var columns: WaveformColumns? = null
-
-    fun columnsFor(peaks: PeakData, startMs: Long, columnMs: Long, count: Int): WaveformColumns {
-        val cached = columns
-        if (cached != null &&
-            peaks === this.peaks &&
-            startMs == this.startMs &&
-            columnMs == this.columnMs &&
-            count == this.count
-        ) {
-            return cached
-        }
-        val built = WaveformBins.buildBars(peaks, startMs, columnMs, count)
-        this.peaks = peaks
-        this.startMs = startMs
-        this.columnMs = columnMs
-        this.count = count
-        columns = built
-        return built
-    }
-}

@@ -42,20 +42,12 @@ object AudioInbox {
         // a file manager was rejected before a single byte was copied.
         val resolvedName = withContext(Dispatchers.IO) {
             displayName?.takeIf { it.isNotBlank() } ?: displayNameOf(app, uri)
-        } ?: return Result.Rejected("no name")
-        val name = if (AudioImport.accepts(resolvedName)) {
-            resolvedName
-        } else {
-            val extension = extensionFor(app.contentResolver.getType(uri))
-                ?: return Result.Rejected("unsupported format")
-            resolvedName.substringBeforeLast('.', resolvedName) + "." + extension
         }
-        // A name is not a path: a display name that contains a separator would
-        // make File(directory, name) point into a directory that does not exist.
-        val safeName = name.replace('/', '_').replace('\\', '_')
-        if (!AudioImport.accepts(safeName)) {
-            return Result.Rejected("unsupported format")
-        }
+        val mime = runCatching { app.contentResolver.getType(uri) }.getOrNull()
+        // A missing display name is not a reason to refuse: a content:// URI from
+        // a share sheet often has none, and the file can still be copied under a
+        // generated name. It used to bail out here with "no name".
+        val safeName = AudioImport.importName(resolvedName, mime)
         val directory = withContext(Dispatchers.IO) {
             RecordSettings.outputDirectory(app)?.let(::File) ?: defaultOutputDirectory(app)
         } ?: return Result.Rejected("no output directory")
@@ -69,7 +61,7 @@ object AudioInbox {
             } finally {
                 runCatching { temporary.delete() }
             }
-        } ?: return Result.Rejected("copy failed")
+        } ?: return Result.Rejected("copy failed: " + safeName)
         // The import is the file the user will open next: decode its waveform
         // now, in the background, rather than making them wait for it.
         WaveformPrecompute.enqueue(app, staged)
@@ -83,15 +75,6 @@ object AudioInbox {
             if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
         }
     }.getOrNull()
-
-    /** A container extension for the formats the library reads. */
-    private fun extensionFor(mime: String?): String? = when {
-        mime == null -> null
-        mime.contains("mp4") || mime.contains("m4a") || mime.contains("aac") -> "m4a"
-        mime.contains("wav") || mime.contains("x-wav") -> "wav"
-        mime.contains("ogg") || mime.contains("vorbis") -> "ogg"
-        else -> null
-    }
 
     /**
      * The URI of a share intent, if it is an audio file.

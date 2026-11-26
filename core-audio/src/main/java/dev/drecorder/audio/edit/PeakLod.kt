@@ -10,14 +10,15 @@ package dev.drecorder.audio.edit
  * user zoomed in shows a staircase; drawing the detail when the user zoomed out
  * shows noise (DESIGN §12.4).
  *
- * The rule is **two buckets per drawn column**. Two, not one, because a column
- * that holds a single bucket shows exactly that bucket — a loud transient next
- * to a silent one would be averaged into one grey line. The count is per
- * *column* (WaveformBins.MIN_COLUMN_PX), not per pixel: a column is several
- * pixels wide, so this asks for far fewer buckets than a per-pixel rule would,
- * and at the zooms the editor allows the whole-recording overview answers the
- * question — the per-window decode path only wakes up for zooms narrower than
- * the editor permits.
+ * The rule is **one bucket per drawn column**, and it is a rule about the
+ * renderer, not a matter of taste: a drawn column is never finer than a bucket
+ * ([WaveformBins.stepMs] rounds it up to the bucket grid), so asking for two
+ * buckets a column asked for detail the renderer would then throw away. The
+ * earlier two-bucket rule was written for the *filled* outline, where a column
+ * joined its neighbours into one body and a single bucket would have been
+ * averaged into a grey line across several pixels. The drawing is one stick per
+ * column now (「细火柴棍就行」, 2026-11-04), so one bucket is one stick and
+ * there is nothing left to smooth.
  *
  * The resolutions are a ladder rather than a continuum so that a given window
  * always asks for the same one: the same zoom level then always decodes the
@@ -31,7 +32,7 @@ object PeakLod {
     /**
      * The resolutions the subsystem can produce, in buckets per second.
      *
-     * Coarse enough to cover a whole file at 100 buckets/s (10 ms each), fine
+     * Coarse enough to cover a whole file at 10 buckets/s (100 ms each), fine
      * enough to show individual samples' worth of shape at 1000 buckets/s
      * (1 ms each).
      */
@@ -44,6 +45,17 @@ object PeakLod {
     const val FINEST = 1_000
 
     /**
+     * How much extra resolution a decode has to buy before it is worth starting.
+     *
+     * Decoding a window means an extractor seek, a codec start, a decode of
+     * several seconds of audio and a cache write — tens of milliseconds of real
+     * work. A few percent more resolution is not worth any of that: the extra
+     * buckets would be thinner than the stick that draws them, and the picture
+     * would be indistinguishable. Only a doubling is a different picture.
+     */
+    private const val MATERIAL_GAIN = 2
+
+    /**
      * The resolution a window of [spanMs] shown at [widthPx] pixels needs.
      *
      * Never finer than [FINEST]: past that the buckets are smaller than a
@@ -54,10 +66,14 @@ object PeakLod {
         // waveform, so there is nothing to fill. Answering FINEST here decoded a
         // window that was thrown away one frame later (and cached it).
         if (spanMs <= 0L || widthPx <= 0) return COARSE
-        // bucketsPerSecond * spanMs / 1000 >= 2 * columns
+        return LADDER.firstOrNull { it >= requiredBucketsPerSecond(spanMs, widthPx) } ?: FINEST
+    }
+
+    /** One bucket per drawn column, rounded up, as a raw resolution. */
+    private fun requiredBucketsPerSecond(spanMs: Long, widthPx: Int): Long {
+        if (spanMs <= 0L || widthPx <= 0) return COARSE.toLong()
         val columns = (widthPx + WaveformBins.MIN_COLUMN_PX - 1) / WaveformBins.MIN_COLUMN_PX
-        val required = (2L * columns * 1_000L + spanMs - 1L) / spanMs
-        return LADDER.firstOrNull { it >= required } ?: FINEST
+        return (columns.toLong() * 1_000L + spanMs - 1L) / spanMs
     }
 
     /**
@@ -65,11 +81,17 @@ object PeakLod {
      *
      * When it does not, the cached waveform is drawn as it is and nothing is
      * decoded: that is the whole point of computing the waveform while
-     * recording.
+     * recording. With the editor's own limits — a five second floor on the span,
+     * two-pixel columns and a hundred-buckets-a-second cache — the answer is
+     * *no* at every zoom the editor allows, which is the honest statement that
+     * the cache already holds more resolution than the screen can show. The
+     * window decode path stays because the three numbers that make it
+     * unreachable are three separate decisions, and any one of them can change.
      */
     fun needsFinerWaveform(
         spanMs: Long,
         widthPx: Int,
         cachedBucketsPerSecond: Int,
-    ): Boolean = bucketsPerSecondFor(spanMs, widthPx) > cachedBucketsPerSecond
+    ): Boolean = requiredBucketsPerSecond(spanMs, widthPx) >
+        cachedBucketsPerSecond.toLong() * MATERIAL_GAIN
 }

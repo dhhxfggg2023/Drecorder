@@ -3,91 +3,242 @@ package dev.drecorder.audio.edit
 import kotlin.math.abs
 
 /**
- * The waveform re-binned for the screen.
+ * The waveform reduced onto the column grid of **one zoom level**.
  *
- * The cached peaks are fixed at 100 buckets per second; the screen has a
- * different number of pixels. [WaveformBins] bridges the two by giving every
- * drawn column the extremes and the mean loudness of all the buckets that fall
- * into it (DESIGN §12.4).
+ * A waveform is not one picture: it is a family of pictures, one per zoom
+ * level, and the picture is a grid of columns fixed by the span and the width
+ * ([WaveformBins.stepMs]). Reducing the buckets onto that grid is the expensive
+ * half of drawing — every column has to look at every bucket it covers — while
+ * the drawing itself is a lookup per column.
  *
- * [mins] and [maxs] are the true extremes — what a bucket holds, and what the
- * hit-testing and the tests ask for. [levels] is the **mean** of each bucket's
- * amplitude, which is what the picture is drawn from: a column covering half a
- * second of speech would reach full scale on its loudest sample alone, so a
- * peak envelope saturates to a solid block at far zoom (「缩放到最小波形的高低
- * 差特别大，很奇怪」, 2026-10-23), while the mean keeps the loudness contour.
+ * Doing that reduction once per column of scrolling is what made a zoomed-out
+ * waveform stutter: at ten minutes across a phone a column covers a third of a
+ * second, so a single column crossing re-read tens of thousands of buckets,
+ * many times a second while the finger moved (「滑动性和灵动性太差」,
+ * 2026-10-23). Reducing a *page* of columns — three screens' worth — makes that
+ * work happen once per screen of scrolling instead, and the draw block then
+ * only reads it.
+ *
+ * [mins] and [maxs] are the true extremes of the audio each column covers, in
+ * PCM units. A column with no audio behind it — before the recording, past its
+ * end, or in a stretch that was not decoded — holds [WaveformColumns.EMPTY].
  *
  * Pure and Android-free, so the maths of the waveform can be unit-tested
- * off-device — the decoder is the only part that needs a phone.
+ * off-device.
  */
-class WaveformColumns(
-    val count: Int,
+class ColumnPeaks(
+    /** How much audio one column covers, in ms. */
+    val columnMs: Long,
+    /**
+     * When the first column starts, in ms.
+     *
+     * A multiple of [columnMs], and *absolute* — the same grid for every page,
+     * so a column always covers the same stretch of audio wherever the window
+     * happens to be.
+     */
+    val firstColumnStartMs: Long,
     val mins: IntArray,
     val maxs: IntArray,
-    val levels: IntArray,
+    /**
+     * The mean amplitude of every column, in PCM units.
+     *
+     * Drawn as the bright core inside the peak sticks. The extremes say how
+     * loud the loudest moment was; the mean says how loud the column *is*, and
+     * that is the difference between a hairy wall of sticks and a picture with
+     * a loudness contour in it. A silent column has a mean of zero, and so does
+     * a column with no audio at all — the two are told apart by [mins].
+     */
+    val means: IntArray,
 ) {
+
+    init {
+        require(columnMs > 0L) { "columnMs must be positive ($columnMs)" }
+        require(mins.size == maxs.size) {
+            "mins and maxs must have the same length (${mins.size} vs ${maxs.size})"
+        }
+        require(means.size == mins.size) {
+            "means must have the same length as the extremes (${means.size} vs ${mins.size})"
+        }
+    }
+
+    /** How many columns this page covers. */
+    val count: Int get() = mins.size
+
+    /**
+     * The column that holds [timeMs].
+     *
+     * Floor division, so the answer is an index into this page for any moment
+     * inside it. A moment before or after the page gives an index outside
+     * `0 until count`, which [WaveformColumns] reports as [WaveformColumns.EMPTY]
+     * rather than clamping: a column past the end of the audio must draw
+     * nothing, not the last column of the page over and over.
+     */
+    fun indexOf(timeMs: Long): Int =
+        Math.floorDiv(timeMs - firstColumnStartMs, columnMs).toInt()
+}
+
+/**
+ * A window of [count] columns, read out of a [ColumnPeaks] page.
+ *
+ * A view rather than a copy: the draw block runs on every playhead tick, and
+ * copying the arrays there would be work per frame for a picture that only
+ * moves sideways.
+ */
+class WaveformColumns internal constructor(
+    val count: Int,
+    private val source: ColumnPeaks,
+    private val base: Int,
+) {
+
+    /** The quietest sample of column [index], or [EMPTY]. */
+    fun minAt(index: Int): Int {
+        val at = base + index
+        return if (at in source.mins.indices) source.mins[at] else EMPTY
+    }
+
+    /** The loudest sample of column [index], or [EMPTY]. */
+    fun maxAt(index: Int): Int {
+        val at = base + index
+        return if (at in source.maxs.indices) source.maxs[at] else EMPTY
+    }
+
+    /**
+     * The mean amplitude of column [index], or 0.
+     *
+     * Zero for a column outside the page as well: there is nothing there to be
+     * loud, and [isEmpty] is the question that tells the two zeros apart.
+     */
+    fun meanAt(index: Int): Int {
+        val at = base + index
+        return if (at in source.means.indices) source.means[at] else 0
+    }
+
+    /** Whether column [index] has any audio behind it. */
+    fun isEmpty(index: Int): Boolean = minAt(index) == EMPTY
+
     companion object {
-        val EMPTY = WaveformColumns(0, IntArray(0), IntArray(0), IntArray(0))
+        /** A column with no audio behind it. */
+        const val EMPTY = Int.MAX_VALUE
     }
 }
 
-/** Builds [WaveformColumns] out of cached peaks. */
+/** Builds [ColumnPeaks] and reads [WaveformColumns] out of them. */
 object WaveformBins {
 
-    /** The most columns that are ever built; beyond that the pixels repeat. */
+    /** The most columns that are ever built for one screen. */
     const val MAX_COLUMNS = 4_096
 
     /**
      * How narrow a drawn column may be, in pixels.
      *
-     * Six pixels keeps a thousand-column screen from being re-derived while it
-     * scrolls, and it keeps the column count low enough that the whole-screen
-     * overview (10 ms buckets) is finer than every reachable zoom needs — which
-     * is what lets the per-window decode path stay idle.
+     * Three, because the waveform is drawn as one thin stick per column
+     * (WaveformView draws matchsticks, not a filled body — 「波形不要边缘连续，
+     * 不好看，细火柴棍就行」, 2026-11-04). Six-pixel columns were chosen for the
+     * *filled* outline that was drawn before them: with two-pixel sticks those
+     * columns left two thirds of the width empty, so a waveform read as a sparse
+     * comb instead of as sound.
+     *
+     * Three rather than two: at two the sticks are 2.2 px apart on a phone and
+     * the picture becomes a solid body again — the filled envelope the user
+     * rejected. At three they are 3–4 px apart, which leaves a visible matchstick
+     * texture and still fills half the width instead of the third the six-pixel
+     * columns filled. Picking by eye, on rendered frames, not by arithmetic.
+     *
+     * The cost of the narrower column is more columns per screen, and that is
+     * paid by [ColumnPeaks]: the reduction is done per page, not per frame.
      */
-    const val MIN_COLUMN_PX = 6
+    const val MIN_COLUMN_PX = 3
 
     /**
-     * Bins [bars] bars of [barMs] each, starting at [firstBarStartMs].
+     * Reduces [peaks] onto the column grid of [columnMs], starting at
+     * [firstColumnStartMs] and covering [columns] columns.
      *
-     * The bars are anchored to the **recording's** time grid, not to the
-     * screen: bar *i* always covers the same stretch of audio, wherever the
-     * window happens to be. The caller lines the grid up with the window and
-     * translates the whole row by the fraction of a bar it has scrolled, so the
-     * waveform slides smoothly while no bar changes height — which is what a
-     * moving waveform has to look like (「手感很烂，波形移动的时候」,
-     * 2026-10-23). Re-binning per frame instead makes the bars shimmer, which is
-     * what the previous screen-anchored `build` did: it is gone rather than left
-     * unused, because a second way to bin the same audio is exactly the kind of
-     * two-owner problem this project has paid for before.
+     * [firstColumnStartMs] must be a multiple of [columnMs] ([gridStart] is what
+     * produces it), so that pages taken at different moments line up and a
+     * column always covers the same stretch of audio.
      *
-     * [firstBarStartMs] must be a multiple of [barMs]'s grid for the bars to be
-     * stable; [gridStart] is what produces it.
+     * Every bucket that overlaps a column contributes to it, not just the one
+     * under the column's start: a source decoded at a thousand buckets a second
+     * holds ten for every ten-millisecond column, and keeping one of them is
+     * what threw the detail away.
      */
-    fun buildBars(
+    fun reduce(
         peaks: PeakData,
-        firstBarStartMs: Long,
-        barMs: Long,
-        bars: Int,
-    ): WaveformColumns {
-        val count = bars.coerceIn(1, MAX_COLUMNS)
-        val bar = barMs.coerceAtLeast(1L)
-        return aggregate(
-            peaks = peaks,
-            count = count,
-            startOf = { index -> firstBarStartMs + index * bar },
-            endOf = { index -> firstBarStartMs + (index + 1) * bar },
-        )
+        firstColumnStartMs: Long,
+        columnMs: Long,
+        columns: Int,
+    ): ColumnPeaks {
+        val column = columnMs.coerceAtLeast(1L)
+        val count = columns.coerceIn(1, MAX_COLUMNS * 3)
+        val mins = IntArray(count) { WaveformColumns.EMPTY }
+        val maxs = IntArray(count) { WaveformColumns.EMPTY }
+        val means = IntArray(count)
+        val bucketCount = peaks.bucketCount
+        if (bucketCount == 0) return ColumnPeaks(column, firstColumnStartMs, mins, maxs, means)
+
+        val bucketsPerSecond = peaks.bucketsPerSecond
+        val bucketMs = (1_000L / bucketsPerSecond).coerceAtLeast(1L)
+        for (index in 0 until count) {
+            val columnStartMs = firstColumnStartMs + index * column
+            val columnEndMs = columnStartMs + column
+            // Addressed by their own time range rather than by an index clamped
+            // to the data: a window that reaches past the recording has to draw
+            // nothing there, not the last bucket of the file.
+            val firstBucket =
+                ((columnStartMs - peaks.offsetMs) * bucketsPerSecond / 1_000L).toInt()
+            val lastBucket =
+                ((columnEndMs - peaks.offsetMs) * bucketsPerSecond / 1_000L).toInt()
+            var low = Int.MAX_VALUE
+            var high = Int.MIN_VALUE
+            var amplitudeSum = 0L
+            var seen = 0
+            for (bucket in firstBucket..lastBucket) {
+                if (bucket < 0 || bucket >= bucketCount) continue
+                val bucketStartMs = peaks.bucketStartMs(bucket)
+                // Only the part of the bucket that really falls into this column.
+                if (bucketStartMs >= columnEndMs || bucketStartMs + bucketMs <= columnStartMs) {
+                    continue
+                }
+                val minV = peaks.minAt(bucket)
+                val maxV = peaks.maxAt(bucket)
+                if (minV < low) low = minV
+                if (maxV > high) high = maxV
+                amplitudeSum += (abs(minV) + abs(maxV)) / 2
+                seen++
+            }
+            if (low != Int.MAX_VALUE) {
+                mins[index] = low
+                maxs[index] = high
+                means[index] = if (seen == 0) 0 else (amplitudeSum / seen).toInt()
+            }
+        }
+        return ColumnPeaks(column, firstColumnStartMs, mins, maxs, means)
     }
 
     /**
-     * The start of the bar grid at or before [startMs].
+     * The [count] columns that start at [firstColumnStartMs].
+     *
+     * [firstColumnStartMs] must be on the reduced grid ([gridStart] of the
+     * window start); a moment outside the page reads as [WaveformColumns.EMPTY].
+     */
+    fun columnsOf(
+        reduced: ColumnPeaks,
+        firstColumnStartMs: Long,
+        count: Int,
+    ): WaveformColumns = WaveformColumns(
+        count = count.coerceIn(1, MAX_COLUMNS),
+        source = reduced,
+        base = reduced.indexOf(firstColumnStartMs),
+    )
+
+    /**
+     * The start of the column grid at or before [startMs].
      *
      * The view bins from this moment and translates the row by the rest of a
-     * bar, so that two frames of a scroll inside one bar draw the *same* bars
-     * (moved), instead of re-binning the audio into new ones. Kotlin's [mod]
-     * is floor-mod, so a window that reaches before the recording still lands
-     * on the grid.
+     * column, so that two frames of a scroll inside one column draw the *same*
+     * columns (moved), instead of re-binning the audio into new ones. Kotlin's
+     * [mod] is floor-mod, so a window that reaches before the recording still
+     * lands on the grid.
      */
     fun gridStart(startMs: Long, barMs: Long): Long =
         startMs - startMs.mod(barMs.coerceAtLeast(1L))
@@ -99,18 +250,11 @@ object WaveformBins {
     /**
      * How much audio one drawn column covers, in ms.
      *
-     * Zoomed out there are many buckets per pixel, so a column is a number of
-     * whole buckets — the mean over them is what keeps the loudness contour
-     * from saturating. Zoomed in the opposite happens, and drawing one column
-     * per pixel is what turns every bucket into a flat block 5 pixels wide:
+     * Zoomed out there are many buckets per column, so a column is a number of
+     * whole buckets. Zoomed in the opposite happens, and drawing one column per
+     * pixel is what turns every bucket into a flat block five pixels wide:
      * 「放大后看到一个个矩形」 (2026-10-23). So a column is never shorter than a
-     * bucket — and never shorter than [MIN_COLUMN_PX] pixels either. One-pixel
-     * columns made the screen a thousand columns wide, each one re-derived as
-     * the window slid, which is a lot of arithmetic for a picture the eye reads
-     * as a shape; six-pixel columns carry the same outline (the drawing joins
-     * neighbouring columns into one path) at a fraction of the work, and they
-     * keep the whole-recording overview fine enough that the detail decode path
-     * never has to run at all.
+     * bucket — and never narrower than [MIN_COLUMN_PX] pixels either.
      *
      * The answer only changes when the span or the width changes, never when the
      * window scrolls, so the grid stays still while the picture moves.
@@ -123,59 +267,4 @@ object WaveformBins {
         val bucketsPerColumn = (perColumnMs + bucket - 1) / bucket
         return bucket * bucketsPerColumn.coerceAtLeast(1L)
     }
-
-    /**
-     * The extremes of every column, given where each column starts and ends.
-     *
-     * The buckets are addressed by their own time range rather than by an index
-     * clamped to the data: a window that reaches past the recording has to draw
-     * nothing there, not the last bucket of the file. The offset matters too: a
-     * waveform decoded for a window of a longer recording carries the window's
-     * start time.
-     */
-    private fun aggregate(
-        peaks: PeakData,
-        count: Int,
-        startOf: (Int) -> Long,
-        endOf: (Int) -> Long,
-    ): WaveformColumns {
-        val mins = emptyMins(count)
-        val maxs = emptyMaxs(count)
-        // Per column: the sum of the buckets' amplitudes and how many there
-        // were, turned into a mean at the end.
-        val amplitudes = IntArray(count)
-        val bucketsSeen = IntArray(count)
-        val bucketCount = peaks.bucketCount
-        val bucketsPerSecond = peaks.bucketsPerSecond
-
-        for (index in 0 until count) {
-            val columnStartMs = startOf(index)
-            val columnEndMs = endOf(index)
-            if (columnEndMs <= columnStartMs) continue
-
-            val firstBucket = ((columnStartMs - peaks.offsetMs) * bucketsPerSecond / 1_000L).toInt()
-            val lastBucket = ((columnEndMs - peaks.offsetMs) * bucketsPerSecond / 1_000L).toInt()
-            for (bucket in firstBucket..lastBucket) {
-                if (bucket < 0 || bucket >= bucketCount) continue
-                val bucketStart = peaks.bucketStartMs(bucket)
-                val bucketEnd = bucketStart + 1_000L / bucketsPerSecond
-                // Only the part of the bucket that really falls into this column.
-                if (bucketStart >= columnEndMs || bucketEnd <= columnStartMs) continue
-                val minV = peaks.minAt(bucket)
-                val maxV = peaks.maxAt(bucket)
-                if (minV < mins[index]) mins[index] = minV
-                if (maxV > maxs[index]) maxs[index] = maxV
-                amplitudes[index] += (abs(minV) + abs(maxV)) / 2
-                bucketsSeen[index]++
-            }
-        }
-        val levels = IntArray(count) { index ->
-            if (bucketsSeen[index] == 0) 0 else amplitudes[index] / bucketsSeen[index]
-        }
-        return WaveformColumns(count, mins, maxs, levels)
-    }
-
-    private fun emptyMins(count: Int): IntArray = IntArray(count) { Int.MAX_VALUE }
-
-    private fun emptyMaxs(count: Int): IntArray = IntArray(count) { Int.MIN_VALUE }
 }

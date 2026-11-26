@@ -235,6 +235,11 @@ private fun DrecorderApp(
     // invoked from inside another remember { } lambda.
     val appScope = rememberCoroutineScope()
     val coordinator = remember(context, appScope) { UpdateCoordinator(context, appScope) }
+    // The installers earlier versions left behind are this app's storage as far
+    // as the system is concerned, and every version ever downloaded left one
+    // behind. Cleared as soon as the app comes up, not only before the next
+    // download.
+    LaunchedEffect(coordinator) { coordinator.sweepLeftovers() }
     val updateState by coordinator.state.collectAsState()
     val updateNotice by coordinator.notice.collectAsState()
     // These two back the update screen's controls; they are `var` so a tap actually
@@ -295,9 +300,14 @@ private fun DrecorderApp(
             // The same filter the library applies: a session being written is
             // not a finished recording, and counting it made the home card say
             // N+1 against a list of N.
+            val countStarted = android.os.SystemClock.elapsedRealtime()
             recordingCount = withContext(Dispatchers.IO) {
                 library.recordings(activeCaptureName).size
             }
+            android.util.Log.i(
+                "DrecorderWaveform",
+                "home count in " + (android.os.SystemClock.elapsedRealtime() - countStarted) + "ms",
+            )
         }
     }
 
@@ -566,7 +576,16 @@ private fun DrecorderApp(
             // The editor reads the library itself when the user asks to splice
             // another recording in, so the list is never stale and the user
             // does not have to go back to the library to build a merge.
-            loadLibrary = { library.recordings(activeCaptureName) },
+            loadLibrary = {
+            val started = android.os.SystemClock.elapsedRealtime()
+            val rows = library.recordings(activeCaptureName)
+            android.util.Log.i(
+                "DrecorderWaveform",
+                "list " + rows.size + " in " +
+                    (android.os.SystemClock.elapsedRealtime() - started) + "ms",
+            )
+            rows
+        },
         )
 
         Screen.Settings -> SettingsScreen(

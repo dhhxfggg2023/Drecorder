@@ -231,14 +231,25 @@ class PeakBins(
         if (sampleCount <= 0) return
         val usable = min(sampleCount, samples.size)
         val firstFrameOfWaveform = offsetMs * sampleRate / 1_000L
-        var frame = startFrame
+        // Everything below works in frames **relative to the waveform's own
+        // start**, because the bucket array starts there. The decoder reports
+        // frames on the *file's* timeline, so a window that begins at 120 s
+        // arrives with a frame number of 5 292 000 — and indexing the array by
+        // that number emitted 12 100 silent buckets in front of the audio, while
+        // [offsetMs] said the array already began at 120 s. The stretch the
+        // segments landed on was therefore twice their real position: every
+        // second two-minute segment of a long recording was written on top of a
+        // later one, leaving the stretch it belonged to flat and empty.
+        var frame = startFrame - firstFrameOfWaveform
         var sampleIndex = 0
         val framesInBuffer = usable / channelCount
-        if (frame + framesInBuffer <= firstFrameOfWaveform) return
-        if (frame < firstFrameOfWaveform) {
-            val skipFrames = (firstFrameOfWaveform - frame).toInt()
+        // Audio entirely before this waveform's window belongs to the window
+        // before it: drop it, and say so, rather than folding it in.
+        if (frame + framesInBuffer <= 0L) return
+        if (frame < 0L) {
+            val skipFrames = (-frame).toInt()
             sampleIndex = skipFrames * channelCount
-            frame = firstFrameOfWaveform
+            frame = 0L
         }
         if (frame > frameCursor) {
             if (frame - frameCursor <= FRAME_QUANTISATION_SLOP) {

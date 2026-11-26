@@ -28,26 +28,16 @@ class UpdateInstaller(private val context: Context) {
 
     private val appContext = context.applicationContext
 
-    fun downloadDirectory(): File =
-        File(appContext.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: appContext.filesDir, "updates")
-            .apply { mkdirs() }
-
-    fun fileFor(manifest: UpdateManifest): File =
-        File(downloadDirectory(), "drecorder-" + safeVersionName(manifest.versionName) + ".apk")
-
     /**
-     * The version name reduced to something that cannot leave the download
-     * directory.
-     *
-     * The manifest is fetched over the network, so `versionName` is remote input
-     * that used to become a path segment verbatim: a value such as
-     * `../../../x` wrote outside the folder. Nothing but letters, digits, dots,
-     * dashes and underscores survives.
+     * Every file the update flow writes is owned by [storage], so there is one
+     * place that knows where installers live and one place that deletes them
+     * again. Two owners of the same folder is how it grew without bound.
      */
-    private fun safeVersionName(versionName: String): String =
-        versionName.filter { it.isLetterOrDigit() || it == '.' || it == '-' || it == '_' }
-            .take(64)
-            .ifBlank { "update" }
+    private val storage = UpdateStorage(context)
+
+    fun downloadDirectory(): File = storage.directory()
+
+    fun fileFor(manifest: UpdateManifest): File = storage.fileFor(manifest.versionName)
 
     /**
      * Enqueues the download and calls [onComplete] with the local file once the
@@ -57,8 +47,10 @@ class UpdateInstaller(private val context: Context) {
      * fallback loop is the caller's job (see [downloadWithFallback]).
      */
     fun enqueue(manifest: UpdateManifest, url: String): Long {
-        val target = fileFor(manifest)
-        if (target.exists()) target.delete()
+        // Starts from an empty folder: an interrupted download's partial file is
+        // not a resume candidate (its hash can never match), and every older
+        // installer is obsolete the moment this one is offered.
+        val target = storage.begin(manifest.versionName)
 
         val request = DownloadManager.Request(Uri.parse(url)).apply {
             setTitle("Drecorder ${manifest.versionName}")
@@ -71,6 +63,25 @@ class UpdateInstaller(private val context: Context) {
         val manager = appContext.getSystemService(DownloadManager::class.java)
         return manager.enqueue(request)
     }
+
+    /**
+     * Clears the installers earlier versions left behind.
+     *
+     * The update folder is in this app's own external storage, so the system
+     * counts it as this app's data: a user who has updated a dozen times was
+     * seeing a pile of installers as "this app takes gigabytes". Runs at startup,
+     * not only on the next download, so the space comes back without the user
+     * having to update again first.
+     */
+    fun sweepLeftovers() = storage.sweepLeftovers()
+
+    /**
+     * Removes an APK that failed its checksum or certificate check.
+     *
+     * Its only remaining use would be an "install anyway" the user should not be
+     * offered.
+     */
+    fun discard(file: File) = storage.discard(file)
 
     /**
      * Polls until the download finishes, returning the local file.
@@ -203,7 +214,11 @@ class UpdateInstaller(private val context: Context) {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        return runCatching { appContext.startActivity(intent) }.isSuccess
+        val started = runCatching { appContext.startActivity(intent) }.isSuccess
+        // The package has been handed over; the copy on disk is dead weight from
+        // this moment on, whether the user completes the install or cancels it.
+        if (started) storage.afterInstallStarted(apk)
+        return started
     }
 
     /** Sends the user to the per-app "install unknown apps" screen. */

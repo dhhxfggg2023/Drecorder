@@ -25,11 +25,18 @@ object TrackPeaks {
     /**
      * How many buckets per second the track waveform is built at.
      *
-     * Fifty is one bucket per 20 ms: a phone screen shows a minute across a few
-     * hundred pixels, so this is already more resolution than one viewport can
-     * use, and a ten-minute track costs thirty thousand buckets.
+     * Exactly the resolution the on-disk cache holds
+     * ([PeakData.DEFAULT_BUCKETS_PER_SECOND], ten milliseconds). Building the
+     * track finer than its sources cannot add detail, and building it coarser
+     * throws detail away: at fifty, a one-second screen was drawn from fifty
+     * buckets, so the picture went from a comb of sticks towards a row of
+     * blocks while the data underneath never improved.
+     *
+     * The cost is memory, not time: a ten-minute track is sixty thousand
+     * buckets — 240 KB in two short arrays — rebuilt once per edit, not once
+     * per frame.
      */
-    const val BUCKETS_PER_SECOND = 50
+    const val BUCKETS_PER_SECOND = 100
 
     /**
      * Builds the waveform of [clips], or null when the track is empty.
@@ -57,6 +64,33 @@ object TrackPeaks {
         if (totalMs <= 0L) return null
 
         val bps = bucketsPerSecond.coerceAtLeast(1)
+
+        // One clip from the recording's first sample, laid at the start, and
+        // asked for at the resolution the source already has: the track
+        // waveform *is* that recording's waveform, and the honest answer is the
+        // object that already exists.
+        //
+        // This is not a micro-optimisation. A hundred-megabyte recording is an
+        // hour and a half, which the decoder delivers in forty-odd segments, and
+        // every segment republished the whole recording as a partial. Rebuilding
+        // (and re-aggregating, and re-allocating) a three-megabyte waveform per
+        // segment on the main thread is exactly the stutter the user means by
+        // 「解算卡」 — for a picture that is already correct.
+        if (clips.size == 1) {
+            val clip = clips[0]
+            val peaks = peaksOf(clip.file)
+            if (peaks != null &&
+                peaks.bucketsPerSecond == bps &&
+                peaks.offsetMs == 0L &&
+                clip.startMs == 0L &&
+                clip.endMs >= peaks.endMs &&
+                fromMs <= 0L &&
+                toMs >= peaks.endMs
+            ) {
+                return peaks
+            }
+        }
+
         val windowStartMs = fromMs.coerceIn(0L, totalMs - 1L)
         val windowEndMs = toMs.coerceIn(windowStartMs + 1L, totalMs)
         if (windowEndMs <= windowStartMs) return null
