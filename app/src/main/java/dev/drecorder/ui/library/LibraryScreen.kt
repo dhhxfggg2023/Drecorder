@@ -60,12 +60,16 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -85,6 +89,7 @@ import dev.drecorder.ui.design.IconTile
 import dev.drecorder.ui.design.TextActionButton
 import dev.drecorder.ui.design.TonalActionButton
 import dev.drecorder.ui.recordingTitle
+import dev.drecorder.waveforms.PeaksCacheHooks
 import dev.drecorder.ui.recordingWhenLabel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -132,6 +137,9 @@ fun LibraryScreen(
             },
             marker = SilentMarker(context),
             derivedMarker = DerivedMarker(context),
+            // Renaming moves the file, so the waveform cache keyed by the old name
+            // has to follow it; deleting has to take it away.
+            cacheHooks = PeaksCacheHooks(context.filesDir),
         )
     }
 
@@ -478,7 +486,13 @@ fun LibraryScreen(
             // The dialog edits the name, not the file name: the extension is what
             // the library needs to keep listing the recording, so it is not offered
             // for editing (a typed name without one keeps the original format).
-            original = target.nameWithoutExtension,
+            //
+            // A generated name is not offered as a starting point either. It is the
+            // one thing the user came here to get rid of, so asking them to select
+            // and delete `drecorder-20261126-015948-p01` first is the whole bug
+            // (issue #2): the field starts empty and the name is shown as a hint.
+            initial = target.customName.orEmpty(),
+            generated = target.customName == null,
             onDismiss = { pendingRename = null },
             onConfirm = { newName ->
                 pendingRename = null
@@ -492,13 +506,32 @@ fun LibraryScreen(
     }
 }
 
+/**
+ * The rename prompt.
+ *
+ * [initial] is the name the user typed before, or blank when the recording still
+ * carries the engine's generated name ([generated]); [generated] then switches the
+ * field to its hint text instead of pre-filling the name nobody wants to keep.
+ *
+ * The field opens focused with everything selected, so the previous name can be
+ * replaced by typing over it, and it carries its own clear button — both are ways
+ * out of "select this long string by hand first" (issue #2).
+ */
 @Composable
 private fun RenameDialog(
-    original: String,
+    initial: String,
+    generated: Boolean,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
 ) {
-    var text by remember { mutableStateOf(original) }
+    // The selection is part of the field's value, not of the focus: it is what makes
+    // typing replace the name, and it survives the recomposition after the first
+    // keystroke without being reset.
+    var text by remember {
+        mutableStateOf(TextFieldValue(initial, selection = TextRange(0, initial.length)))
+    }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -508,13 +541,34 @@ private fun RenameDialog(
                 value = text,
                 onValueChange = { text = it },
                 singleLine = true,
+                placeholder = if (generated) {
+                    { Text(stringResource(R.string.library_rename_hint)) }
+                } else {
+                    null
+                },
+                trailingIcon = {
+                    if (text.text.isNotEmpty()) {
+                        IconButton(
+                            onClick = {
+                                text = TextFieldValue("", selection = TextRange.Zero)
+                                focus.requestFocus()
+                            },
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Close,
+                                contentDescription = stringResource(R.string.library_rename_clear),
+                            )
+                        }
+                    }
+                },
+                modifier = Modifier.focusRequester(focus),
             )
         },
         confirmButton = {
             TonalActionButton(
                 text = stringResource(R.string.common_confirm),
-                enabled = text.isNotBlank() && text.trim() != original,
-                onClick = { onConfirm(text.trim()) },
+                enabled = text.text.isNotBlank() && text.text.trim() != initial,
+                onClick = { onConfirm(text.text.trim()) },
             )
         },
         dismissButton = {
@@ -711,9 +765,22 @@ private suspend fun shareUri(context: Context, file: File): Uri? = withContext(D
 
     runCatching {
         val directory = File(context.cacheDir, "sharing").apply { mkdirs() }
+        // One copy per recording, and the size alone is not enough to tell whether
+        // it is still the same audio: an edit that keeps the size, or a different
+        // recording that happens to share the name, would be shared as the old
+        // bytes. The modification time is what changes when the file is rewritten.
         val copy = File(directory, file.name)
-        if (!copy.isFile || copy.length() != file.length()) {
+        val stale = !copy.isFile ||
+            copy.length() != file.length() ||
+            copy.lastModified() != file.lastModified()
+        if (stale) {
             file.copyTo(copy, overwrite = true)
+            copy.setLastModified(file.lastModified())
+            // Older copies of other recordings go with it: the cache would
+            // otherwise grow by one full recording per share and never shrink.
+            directory.listFiles()
+                ?.filter { it.isFile && it.name != copy.name }
+                ?.forEach { runCatching { it.delete() } }
         }
         FileProvider.getUriForFile(context, authority, copy)
     }.getOrNull()

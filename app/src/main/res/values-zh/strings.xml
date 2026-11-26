@@ -142,6 +142,8 @@
     <string name="library_delete_failed">删除失败</string>
     <string name="library_share">分享</string>
     <string name="library_rename">重命名</string>
+    <string name="library_rename_hint">输入名称，例如：会议录音</string>
+    <string name="library_rename_clear">清空名称</string>
     <string name="library_play">播放</string>
     <string name="library_more">更多操作</string>
     <string name="library_silent_badge">无声音</string>

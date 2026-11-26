@@ -142,6 +142,8 @@
     <string name="library_delete_failed">Delete failed</string>
     <string name="library_share">Share</string>
     <string name="library_rename">Rename</string>
+    <string name="library_rename_hint">Type a name, for example: Team meeting</string>
+    <string name="library_rename_clear">Clear the name</string>
     <string name="library_play">Play</string>
     <string name="library_more">More actions</string>
     <string name="library_silent_badge">Silent</string>
