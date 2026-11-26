@@ -70,6 +70,7 @@ import dev.drecorder.ui.editor.EditorScreen
 import dev.drecorder.ui.home.HomeScreen
 import dev.drecorder.ui.library.LibraryScreen
 import dev.drecorder.ui.library.defaultOutputDirectory
+import dev.drecorder.waveforms.PeaksCacheHooks
 import dev.drecorder.ui.settings.AboutSettingsScreen
 import dev.drecorder.ui.settings.AppearanceSettingsScreen
 import dev.drecorder.ui.settings.AudioSettingsScreen
@@ -263,6 +264,7 @@ private fun DrecorderApp(
             // an original: the badge, and any later "was this edited?" question,
             // needs the same markers the library screen reads.
             derivedMarker = DerivedMarker(context),
+            cacheHooks = PeaksCacheHooks(context.filesDir),
         )
     }
 
@@ -281,10 +283,21 @@ private fun DrecorderApp(
         editingTargets = editingPaths.mapNotNull { byPath[it] }
     }
 
+    // The file a running session is writing, by name. The library must not offer
+    // it: deleting it would unlink the file the encoder still holds open.
+    val activeCaptureName = (captureState as? CaptureState.Recording)
+        ?.outputPath
+        ?.let { path -> File(path).name }
+
     // The home screen only needs the number of files, not the rows themselves.
     LaunchedEffect(screen, captureState) {
         if (screen == Screen.Home) {
-            recordingCount = withContext(Dispatchers.IO) { library.recordings().size }
+            // The same filter the library applies: a session being written is
+            // not a finished recording, and counting it made the home card say
+            // N+1 against a list of N.
+            recordingCount = withContext(Dispatchers.IO) {
+                library.recordings(activeCaptureName).size
+            }
         }
     }
 
@@ -458,12 +471,6 @@ private fun DrecorderApp(
             }
         }
     }
-
-    // The file a running session is writing, by name. The library must not offer
-    // it: deleting it would unlink the file the encoder still holds open.
-    val activeCaptureName = (captureState as? CaptureState.Recording)
-        ?.outputPath
-        ?.let { path -> File(path).name }
 
     // One transition for every change of page. A move between the two top-level
     // pages is a scale-and-fade — the page you asked for grows into place, which

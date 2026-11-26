@@ -90,6 +90,42 @@ object PeaksCache {
     )
 
     /**
+     * Deletes every cache derived from [recording]: the overview and every window.
+     *
+     * Without this a deleted recording leaves its cache behind for ever — the app
+     * has no other bookkeeping to notice it is no longer referenced.
+     */
+    fun drop(recording: File, cacheDirectory: File) {
+        runCatching { fileFor(recording, cacheDirectory).delete() }
+        val prefix = recording.name + "."
+        windowDirectory(cacheDirectory).listFiles()
+            ?.filter { it.isFile && it.name.startsWith(prefix) }
+            ?.forEach { runCatching { it.delete() } }
+    }
+
+    /**
+     * Carries the caches of [from] over to [to] after a rename.
+     *
+     * The cache names are derived from the file name, so without this a renamed
+     * recording loses its waveform and the editor decodes the whole file again on
+     * the next open — the longest recordings, the ones where it hurts most.
+     */
+    fun rename(from: File, to: File, cacheDirectory: File) {
+        val overview = fileFor(from, cacheDirectory)
+        if (overview.isFile) {
+            runCatching { overview.renameTo(fileFor(to, cacheDirectory)) }
+        }
+        val fromPrefix = from.name + "."
+        val toPrefix = to.name + "."
+        windowDirectory(cacheDirectory).listFiles()
+            ?.filter { it.isFile && it.name.startsWith(fromPrefix) }
+            ?.forEach { window ->
+                val renamed = File(window.parentFile, toPrefix + window.name.removePrefix(fromPrefix))
+                runCatching { window.renameTo(renamed) }
+            }
+    }
+
+    /**
      * Keeps only the [keep] newest window caches.
      *
      * A zoom level and a scroll position are cheap to recreate but they are not

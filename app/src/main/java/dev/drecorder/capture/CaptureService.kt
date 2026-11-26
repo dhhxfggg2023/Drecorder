@@ -31,6 +31,7 @@ import dev.drecorder.ui.UiPreferences
 import dev.drecorder.waveforms.WaveformPrecompute
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -258,13 +259,24 @@ class CaptureService : Service() {
         completed = true
         WaveformPrecompute.setCaptureActive(false)
         CaptureSession.onFinished(handle)
-        shutdown()
-        if (handle == null) return
+        if (handle == null) {
+            shutdown()
+            return
+        }
         // Two files per recording (a silence marker and a cached waveform) is a
         // handful of milliseconds on a good day, but this runs on the main thread
         // that also drives the notification and the overlay, and a segmented
         // session writes them for every slice. Off the main thread.
-        serviceScope.launch(Dispatchers.IO) { persist(handle) }
+        //
+        // Shutting down *after* the write, and on a scope the service cannot
+        // cancel: stopSelf() schedules onDestroy(), which cancels [serviceScope].
+        // Launched first and cancelled a moment later, the marker of a silent
+        // recording and the cached waveform were simply lost — intermittently,
+        // which is the worst way for a bug to present.
+        serviceScope.launch(NonCancellable + Dispatchers.IO) {
+            runCatching { persist(handle) }
+            shutdown()
+        }
     }
 
     private fun persist(handle: RecordingHandle) {

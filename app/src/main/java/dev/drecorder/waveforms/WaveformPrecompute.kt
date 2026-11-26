@@ -84,6 +84,7 @@ object WaveformPrecompute {
             directoryProvider = { directory },
             marker = SilentMarker(app),
             derivedMarker = DerivedMarker(app),
+            cacheHooks = PeaksCacheHooks(app.filesDir),
         )
         val needing = withContext(Dispatchers.IO) {
             library.recordings().map { it.file }.filter { file ->

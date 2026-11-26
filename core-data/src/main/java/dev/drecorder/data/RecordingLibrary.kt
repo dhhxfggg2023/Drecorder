@@ -109,6 +109,24 @@ fun formatDuration(millis: Long): String {
 }
 
 /**
+ * Keeps the app's derived caches in step with the recordings they describe.
+ *
+ * The peaks caches are keyed by the recording's file name and live in the app's own
+ * storage, so a recording that is deleted leaves its cache behind for ever, and a
+ * recording that is renamed leaves a cache nobody will ever read — the next open
+ * decodes the whole file again. core-data cannot reach the cache itself (it is in
+ * core-audio, which depends on this module), so the owner of both supplies this.
+ */
+interface RecordingCacheHooks {
+
+    /** [recording] is gone; drop everything derived from it. */
+    fun onRemoved(recording: File)
+
+    /** [from] is now [to]; carry anything derived from it across. */
+    fun onMoved(from: File, to: File)
+}
+
+/**
  * Lists recordings from the capture output directory.
  *
  * The writers need a real filesystem path (`MediaMuxer` takes a path or a file
@@ -119,6 +137,7 @@ class RecordingLibrary(
     private val directoryProvider: () -> File?,
     private val marker: SilentMarker,
     private val derivedMarker: DerivedMarker? = null,
+    private val cacheHooks: RecordingCacheHooks? = null,
 ) {
 
     /**
@@ -165,6 +184,7 @@ class RecordingLibrary(
         if (!deleted) return false
         marker.clear(recording.displayName)
         derivedMarker?.clear(recording.displayName)
+        cacheHooks?.onRemoved(recording.file)
         return true
     }
 
@@ -177,6 +197,11 @@ class RecordingLibrary(
         if (extension.isEmpty() || extension.length == recording.file.name.length) return false
         val typed = newDisplayName.trim()
         if (typed.isEmpty() || typed.contains('/') || typed.contains('\\')) return false
+        // ".m4a" is a valid recording extension and a useless name: the file would
+        // be hidden, and the list would show an empty title. A name has to have
+        // something in front of the extension.
+        val stem = typed.substringBeforeLast('.', "")
+        if (typed.isRecordingExtension() && stem.isBlank()) return false
         val newName = if (typed.isRecordingExtension()) typed else "${typed.trimEnd('.')}.$extension"
 
         val target = File(recording.file.parentFile, newName)
@@ -191,6 +216,7 @@ class RecordingLibrary(
                 derivedMarker?.clear(recording.displayName)
                 derivedMarker?.markDerived(newName)
             }
+            cacheHooks?.onMoved(recording.file, target)
         }
         return renamed
     }

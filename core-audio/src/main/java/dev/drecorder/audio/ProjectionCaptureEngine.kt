@@ -98,6 +98,10 @@ class ProjectionCaptureEngine(
     @Volatile
     private var running = false
 
+    /** When this session began; a rotation keeps it, so the timer does not reset. */
+    @Volatile
+    private var sessionStartedAtMillis = 0L
+
     /**
      * Set by whichever caller gets to end this session first.
      *
@@ -173,6 +177,7 @@ class ProjectionCaptureEngine(
         recorder = audioRecord
         files.clear()
         segmentDurationsMs.clear()
+        sessionStartedAtMillis = System.currentTimeMillis()
         writer = createWriter(bytesPerSecond)
         detector.reset()
         _targetSilent.value = false
@@ -182,7 +187,6 @@ class ProjectionCaptureEngine(
         running = true
 
         worker = Thread({ pump(audioRecord) }, "drecorder-capture").apply { start() }
-        _state.value = CaptureState.Recording(files.first().absolutePath, System.currentTimeMillis())
     }.onFailure { error ->
         running = false
         // A writer that was created but never fed has already created its file;
@@ -296,6 +300,12 @@ class ProjectionCaptureEngine(
                 resolvedEncoder.createWriter(file, format.sampleRate, format.channelCount),
             ) { "failed to create a writer for $resolvedEncoder" }
             files += file
+            // Publishing the state here — rather than once after the loop starts —
+            // is what keeps the library honest across a segmented session. The
+            // library hides the one file named by the current state, so a name that
+            // never changed hid the *finished* first slice and offered the slice
+            // still being written for deletion.
+            _state.value = CaptureState.Recording(file.absolutePath, sessionStartedAtMillis)
             created
         }
 
