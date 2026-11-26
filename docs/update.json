@@ -1,17 +1,17 @@
 {
-    "versionCode": 27,
-    "versionName": "0.3.17",
+    "versionCode": 28,
+    "versionName": "0.4.0",
     "minSupportedVersionCode": 1,
-    "apkUrl": "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.17/drecorder-0.3.17.apk",
+    "apkUrl": "https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.4.0/drecorder-0.4.0.apk",
     "mirrors": [
-        "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.17/drecorder-0.3.17.apk",
-        "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.17/drecorder-0.3.17.apk",
-        "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.3.17/drecorder-0.3.17.apk"
+        "https://ghfast.top/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.4.0/drecorder-0.4.0.apk",
+        "https://gh-proxy.com/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.4.0/drecorder-0.4.0.apk",
+        "https://ghproxy.net/https://github.com/dhhxfggg2023/Drecorder/releases/download/v0.4.0/drecorder-0.4.0.apk"
     ],
-    "sizeBytes": 53337132,
-    "sha256": "695012733346626b9b2298a93d843d4c988e8a3b5cc00c10f3aa96a0d9eb9921",
+    "sizeBytes": 53354368,
+    "sha256": "b613edd54601e5832e28d09873f16a7fcb5aa4b7f26e48e1c4db5ebd2ec2583b",
     "signingCertSha256": "4f070db7fd59b883e7ab771f88cda4bc80ce3b97e1defcf9e7faeab5a496a348",
-    "publishedAt": "2026-11-26T00:52:38Z",
-    "releaseNotes": "v0.3.17\n\n## 修复\n- 重命名弹窗不再预填自动生成的文件名：默认空输入框 + 提示文字；已改过名的录音打开即全选，可直接打字覆盖；输入框右侧新增清空按钮（#2）\n- 分段录制时列表显示反了：已写完的分段不出现、正在写的分段却能删。现在每次切段都会更新正在写入的文件\n- 静音标记与波形缓存可能丢失：结束录制时先写完标记再关闭服务，不再被取消\n- 删除或重命名录音后，波形缓存会跟着删除或改名，不再残留或需要重新解码\n- 重命名成只有扩展名的名字会被拒绝，避免出现无标题的录音\n- 首页录音数量与列表中实际条数一致（录制中不再多算一条）\n- 分享时不再复用同名同大小但内容已变的缓存副本，并清理其它残留副本\n\n## 其它\n- core-data 66 例、core-audio 269 例单测全部通过；lint 0 error",
+    "publishedAt": "2026-11-26T04:22:00Z",
+    "releaseNotes": "v0.4.0\n\n## 波形\n- 波形重做为**双色火柴棍**：外层暗色是这一列声音的峰值跨度，内层亮色是这一列的平均响度。峰值只说明「最响的那一下有多响」，平均响度才是「这里到底有多吵」\n- 每根火柴代表的时间从 40 ms 缩短到 20 ms（一屏 5 秒时），不再是一排稀疏的梳子\n- 时间线波形分辨率提升到与缓存同档，不再用一半的数据画图\n- 安静的录音自动放大到填满波形区（上限约 +36 dB），不再是一条细线\n- 分桶改为按页计算，长录音滚动更跟手；所有火柴合并成一次绘制\n\n## 修复\n- **长录音波形每隔两分钟空一段**：分段解码时窗口索引算错，音频被写到两倍位置并覆盖下一段。这是数据错误，不是真的没声音\n- 旧波形缓存自动失效并重建；启动时还会检查缓存是否损坏，损坏即重扫\n- 指定应用选择器现在会显示已选应用（图标+名称），可直接点掉；以前每次打开都是空白\n- 导入的音频在列表里不显示：导入支持的格式比列表扫描的格式多，文件写进去了却扫不到\n- 更新安装包不再无限堆积：下载前清空、安装后删除、启动时清扫历史残留\n- 修复打开长录音时因每段重复拷贝整条波形而造成的卡顿\n\n## 交互\n- 波形手势区扩大到整个编辑区，不再只限于中间那条波形带\n- 提示、导出进度、操作按钮改为浮层，出现时音轨不再上下跳动\n\n## 其它\n- core-audio 288 例、core-data 80 例单测全部通过；lint 0 error",
     "force": false
 }
